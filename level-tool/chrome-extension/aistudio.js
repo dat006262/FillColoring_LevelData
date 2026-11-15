@@ -128,6 +128,7 @@
 
   async function attach() {
     const oldImages = new Set([...document.images].map(img => img.currentSrc || img.src));
+    const oldTiles = new Set(document.querySelectorAll('ms-media-chunk, .media-chunk, .file-chip, [role="figure"]'));
     const bytes = Uint8Array.from(atob(task.image), c => c.charCodeAt(0));
     const file = new File([bytes], task.filename, { type: 'image/png' });
     const dt = new DataTransfer();
@@ -205,7 +206,7 @@
       const filename = [...document.querySelectorAll('[title],[aria-label]')].some(el =>
         (el.getAttribute('title') || el.getAttribute('aria-label') || '').includes(task.filename)
       );
-      const mediaTiles = [...document.querySelectorAll('ms-media-chunk, .media-chunk, .file-chip, [role="figure"]')].filter(visible);
+      const mediaTiles = [...document.querySelectorAll('ms-media-chunk, .media-chunk, .file-chip, [role="figure"]')].filter(el => visible(el) && !oldTiles.has(el));
       return thumbnails.length || filename || mediaTiles.length;
     }, 60, 'AI Studio chưa nhận ảnh đính kèm. Kiểm tra tab AI Studio.');
 
@@ -213,10 +214,9 @@
   }
 
   function isModelOutput(el) {
-    if (el.closest('ms-prompt-input, .prompt-box, .input-area, form, .user-turn, [data-role="user"], ms-media-chunk')) {
-      return false;
-    }
-    return true;
+    if (el.closest('ms-prompt-input, .prompt-box, .input-area, .user-turn, [data-role="user"], [data-turn-role="user"]')) return false;
+    // Media chunks also occur inside model responses. Require positive model ancestry.
+    return !!el.closest('ms-model-response, model-response, .model-turn, [data-role="model"], [data-role="assistant"], [data-turn-role="model"]');
   }
 
   function getGeneratedImages(beforeRunImages) {
@@ -230,6 +230,10 @@
   }
 
   async function run() {
+    if (task.stage === 'origin') {
+      // Respect the step-1 chat selected in settings, but never attach an image.
+      task.image = '';
+    }
     const marker = 'fillcoloring-aistudio-submitted-' + task.id;
     if (sessionStorage.getItem(marker)) {
       throw new Error('Tab đã xử lý yêu cầu này trước đó. Không gửi lại để tránh tạo ảnh trùng.');
@@ -251,7 +255,7 @@
 
     await waitFor(editor, 40, 'Chưa thấy ô nhập AI Studio. Hãy hoàn tất đăng nhập trong tab.');
 
-    if (task.image) {
+    if (task.stage !== 'origin' && task.image) {
       showStatus('Đang tải ảnh vào AI Studio…');
       await attach();
       check();
@@ -285,6 +289,17 @@
     const beforeRunImages = new Set([...document.images].map(img => img.currentSrc || img.src));
 
     check();
+    if (task.stage === 'origin') {
+      // Inspect only the active composer. Saved chats contain media in old turns,
+      // which are not attachments to the prompt we are about to submit.
+      const composer = box.closest('ms-prompt-input, .prompt-box, .input-area') || box.parentElement;
+      if (!composer) throw new Error('Không xác định được vùng nhập prompt AI Studio.');
+      const media = querySelectorAllDeep('ms-media-chunk, .media-chunk, .file-chip, ms-image-chunk', composer).filter(visible);
+      const files = querySelectorAllDeep('input[type="file"]', composer).some(el => el.files?.length);
+      if (media.length || files) {
+        throw new Error('Bước 1 chỉ gửi chữ nhưng ô nhập hiện tại còn ảnh/tệp đính kèm. Hãy gỡ tệp trong ô nhập rồi chạy lại.');
+      }
+    }
     sessionStorage.setItem(marker, 'sent');
     runBtn.click();
 

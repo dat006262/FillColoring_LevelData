@@ -185,11 +185,72 @@ function readFile(file){return new Promise((resolve,reject)=>{if(file.size>18*10
 function showImport(){$('import-dialog').showModal();}
 function modeFields(){const web=$('processing-mode').value==='browser';$('browser-settings').hidden=!web;$('api-settings').hidden=web;$('forget-key').hidden=web;}
 
-function showSettings(){
+const settingFields = {
+  'processing-mode':'mode', 'canva-url':'canva_url', 'browser-url':'browser_url',
+  'aistudio-origin-url':'aistudio_origin_url', 'aistudio-url':'aistudio_url',
+  'browser-email':'browser_email', 'model':'model', 'origin-prompt':'origin_prompt',
+  'patch-prompt':'patch_prompt', 'color-prompt':'color_prompt',
+  'aistudio-color-prompt':'aistudio_color_prompt'
+};
+let settingsQueue = Promise.resolve();
+const settingTimers = new Map();
+const settingsErrors = new Map();
+function settingsStatus(message, error=false) {
+  $('settings-save-status').textContent=message;
+  $('settings-save-status').style.color=error?'#a04435':'#376c4f';
+}
+function persistSettings(values) {
+  const save = settingsQueue.catch(()=>{}).then(async()=>{
+    settingsStatus('Đang lưu cài đặt…');
+    const result=await api('settings', values);
+    // An older running server can silently ignore newly added fields.
+    for(const key of Object.keys(values)) {
+      if(['api_key','remember','forget_key'].includes(key)) continue;
+      if(!(key in result)) throw new Error('Server đang chạy bản cũ, chưa lưu được '+key+'. Hãy khởi động lại server.');
+    }
+    state.settings=result;
+    for(const key of Object.keys(values)) settingsErrors.delete(key);
+    settingsStatus(settingsErrors.size ? [...settingsErrors.values()].join(' · ') : 'Đã lưu cài đặt.', settingsErrors.size>0);
+    return result;
+  });
+  settingsQueue=save;
+  return save.catch(error=>{
+    for(const key of Object.keys(values)) settingsErrors.set(key,error.message);
+    settingsStatus(error.message,true);
+    throw error;
+  });
+}
+function saveSetting(id) {
+  clearTimeout(settingTimers.get(id));
+  settingTimers.delete(id);
+  return persistSettings({[settingFields[id]]:$(id).value.trim()}).catch(()=>{});
+}
+for(const id of Object.keys(settingFields)) {
+  $(id).addEventListener('input',()=>{
+    settingsStatus('Chưa lưu — đang nhập…');
+    clearTimeout(settingTimers.get(id));
+    settingTimers.set(id,setTimeout(()=>saveSetting(id),700));
+  });
+  $(id).addEventListener('change',()=>saveSetting(id));
+}
+$('remember-key').addEventListener('change',()=>{
+  persistSettings({remember:$('remember-key').checked,api_key:$('api-key').value.trim()}).catch(()=>{});
+});
+$('api-key').addEventListener('change',()=>{
+  persistSettings({api_key:$('api-key').value.trim(),remember:$('remember-key').checked}).catch(()=>{});
+});
+$('settings-dialog').addEventListener('close',()=>{
+  for(const id of [...settingTimers.keys()]) saveSetting(id);
+});
+
+async function showSettings(){
+  for(const id of [...settingTimers.keys()]) saveSetting(id);
+  await settingsQueue.catch(()=>{});
   const s=state.settings;
   $('processing-mode').value=s.mode||'browser';
   $('canva-url').value=s.canva_url||'https://www.canva.com/design/DAHa8kUkuLo/NKq0irljjr17Cx37SmYEQw/edit';
   $('browser-url').value=s.browser_url||'https://gemini.google.com/u/2/app';
+  $('aistudio-origin-url').value=s.aistudio_origin_url||'https://aistudio.google.com/u/2/prompts/new_chat';
   $('aistudio-url').value=s.aistudio_url||'https://aistudio.google.com/u/2/prompts/1wN9BKl3arwh3KcwLRU01EaNeB7JoSw7o';
   $('browser-email').value=s.browser_email||'mongnangthoi@gmail.com';
   modeFields();
@@ -197,7 +258,7 @@ function showSettings(){
   $('key-state').textContent=s.key_error||(s.has_key?'Đã có khóa. Để trống nếu giữ khóa hiện tại.':'Chưa cấu hình API key.');
   $('remember-key').checked=s.saved_key;
   $('model').value=s.model;
-  $('origin-prompt').value=s.origin_prompt||'A cute anime girl, pop-art anime style, clean vector lines, cel shading, bright and vivid colors, compact circular background frame, close-up portrait, square aspect ratio 1:1.';
+  $('origin-prompt').value=s.origin_prompt||'A beautiful peaceful natural, square image, 1024 × 1024 px.';
   $('patch-prompt').value=s.patch_prompt;
   $('color-prompt').value=s.color_prompt;
   $('aistudio-color-prompt').value=s.aistudio_color_prompt||'tô màu tranh sau';
@@ -267,10 +328,13 @@ $('import-form').onsubmit=async e=>{
 $('settings-form').onsubmit=async e=>{
   e.preventDefault();
   try{
-    await api('settings',{
+    for(const timer of settingTimers.values()) clearTimeout(timer);
+    settingTimers.clear();
+    await persistSettings({
       mode:$('processing-mode').value,
       canva_url:$('canva-url').value,
       browser_url:$('browser-url').value,
+      aistudio_origin_url:$('aistudio-origin-url').value,
       aistudio_url:$('aistudio-url').value,
       browser_email:$('browser-email').value,
       api_key:$('api-key').value,
@@ -285,7 +349,7 @@ $('settings-form').onsubmit=async e=>{
     $('settings-dialog').close();
     toast('Đã lưu cài đặt.');
     await refresh(true);
-  }catch(err){toast(err.message);}
+  }catch(err){settingsStatus(err.message,true);}
 };
 
 $('forget-key').onclick=async()=>{try{await api('settings',{forget_key:true});await refresh(true);showSettings();toast('Đã quên API key.');}catch(e){toast(e.message);}};

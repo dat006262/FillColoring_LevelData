@@ -128,3 +128,21 @@ Chạy toàn bộ bộ kiểm thử tự động (21 tests):
 python -m unittest discover -s tests -v
 ```
 *(Nếu chạy từ thư mục gốc, gán `PYTHONPATH=./level-tool` trước khi chạy unittest)*.
+
+
+## Sửa lỗi ảnh rỗng (1.2.1)
+
+- Reload tiện ích tại `chrome://extensions`, đóng các tab tác vụ cũ rồi khởi động lại server để nhận bản sửa.
+- Canva chỉ nhận ảnh mới sau chuyển đổi Line Art, không chụp canvas nội bộ của trình biên tập. Nếu không xác định được một ảnh mới, tải PNG từ Canva và dùng **Nhập kết quả có sẵn**.
+- Ảnh gần như toàn đen, trắng hoặc trong suốt bị từ chối; bước tô màu không nhận ảnh line. Kiểm tra chạy cả khi nhập, nhận AI, duyệt và xuất. Đây là kiểm tra lỗi ảnh cơ bản; vẫn cần duyệt bằng mắt độ kín nét và độ khớp màu.
+- Line cuối giữ alpha trong suốt. Xem trên nền trắng/ô caro; trình xem bỏ qua alpha có thể hiển thị toàn đen. Không chuyển line cuối sang JPEG.
+- Đổi ảnh nguồn bỏ lựa chọn/duyệt của các bước sau, giữ lịch sử phiên bản.
+- Server xuất vào `output` cạnh thư mục `level-tool`; có thể đổi bằng `--output`. `Store` dùng riêng thư mục output trong data trừ khi truyền `output_dir`, nên test không còn ghi ảnh giả vào output thật.
+- Bộ test dùng ảnh mẫu `example` để kiểm tra 5 loại ảnh và khả năng giữ nét khi xóa nền; AI trong unit test được giả lập, không chứng minh chất lượng của lần sinh ảnh trực tuyến.
+
+
+## Link AI Studio riêng cho từng bước (1.2.3)
+
+Cài đặt có hai ô URL độc lập: **AI Studio tạo ảnh (Bước 1)** và **AI Studio tô màu (Bước 4)**. Bước 1 mặc định dùng chat mới nhưng có thể chọn link chat riêng; tool mở đúng link đã lưu, chỉ gửi chữ, không đính kèm ảnh. Nếu chat bước 1 còn media, tool dừng trước Run để tránh gửi nhầm. Bước 4 giữ link đã lưu từ phiên bản cũ và đính kèm line đã vá.
+
+Ảnh bước 1 mặc định là 1024 × 1024. Khởi động lại server, Reload tiện ích Chrome và tải lại trang Studio sau cập nhật.

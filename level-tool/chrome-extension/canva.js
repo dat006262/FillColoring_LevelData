@@ -67,8 +67,6 @@
     dropTarget.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
     dropTarget.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
 
-    // Also dispatch paste event
-    window.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt }));
     await sleep(2000);
   }
 
@@ -92,7 +90,7 @@
     // Now look for "Nghệ thuật đường nét" (Line art)
     showStatus('Đang chọn Nghệ thuật đường nét…');
     const lineArtOption = await waitFor(() => {
-      const all = [...document.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"], div')].filter(visible);
+      const all = [...document.querySelectorAll('button, [role="button"], [role="radio"], [role="tab"], [role="option"]')].filter(visible);
       return all.find(el => /nghệ thuật đường nét|line art/i.test(label(el)));
     }, 20, 'Không tìm thấy tùy chọn "Nghệ thuật đường nét" trong Khớp định dạng.');
 
@@ -101,36 +99,29 @@
     await sleep(3500);
   }
 
-  async function extractLineImage() {
-    showStatus('Đang trích xuất ảnh nét từ Canva…');
-    // Look for canvas or image in Canva editor
-    const canvasElements = [...document.querySelectorAll('canvas')].filter(visible);
-    for (const c of canvasElements) {
-      if (c.width >= 256 && c.height >= 256) {
-        try {
-          const dataUrl = c.toDataURL('image/png');
-          if (dataUrl && dataUrl.length > 5000) {
-            return dataUrl.split(',')[1];
-          }
-        } catch (_) {}
-      }
-    }
-
-    // Try finding rendered img
-    const imgs = [...document.querySelectorAll('img')].filter(img => visible(img) && img.naturalWidth >= 256 && img.naturalHeight >= 256);
-    const candidate = imgs.at(-1);
-    if (candidate) {
+  async function extractLineImage(before) {
+    showStatus('Đang chờ ảnh Line Art mới từ Canva.');
+    // Editor canvases can be WebGL layers, blank buffers, or selection overlays.
+    // Only accept a newly generated image; never serialize arbitrary editor canvases.
+    let stable = '', since = 0;
+    return await waitFor(() => {
+      const candidates = [...document.images].filter(img =>
+        visible(img) && img.complete && img.naturalWidth >= 256 && img.naturalHeight >= 256 &&
+        !before.has(img.currentSrc || img.src));
+      if (candidates.length !== 1) { stable = ''; return null; }
+      const img = candidates[0], src = img.currentSrc || img.src;
+      if (src !== stable) { stable = src; since = Date.now(); return null; }
+      if (Date.now() - since < 5000) return null;
       try {
         const c = document.createElement('canvas');
-        c.width = candidate.naturalWidth;
-        c.height = candidate.naturalHeight;
-        c.getContext('2d').drawImage(candidate, 0, 0);
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0);
         return c.toDataURL('image/png').split(',')[1];
-      } catch (_) {}
-      return candidate.currentSrc || candidate.src;
-    }
-
-    throw new Error('Chưa lấy được ảnh nét từ Canva. Hãy tải ảnh về rồi dùng Nhập kết quả có sẵn.');
+      } catch (_) {
+        if (/^https:\/\//.test(src)) return src;
+        throw new Error('Không đọc được ảnh Canva. Tải PNG và nhập kết quả có sẵn.');
+      }
+    }, 180, 'Không xác định được một ảnh Line Art mới. Tải đúng PNG từ Canva rồi dùng Nhập kết quả có sẵn.');
   }
 
   async function run() {
@@ -146,11 +137,12 @@
     await uploadImage();
     check();
 
+    const before = new Set([...document.images].map(img => img.currentSrc || img.src));
     await applyLineArtStyle();
     check();
 
     sessionStorage.setItem(marker, 'done');
-    const result = await extractLineImage();
+    const result = await extractLineImage(before);
 
     showStatus('Đang chuyển ảnh nét về Studio…');
     clearInterval(heartbeat);

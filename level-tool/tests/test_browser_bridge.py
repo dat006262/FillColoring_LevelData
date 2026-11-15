@@ -10,9 +10,10 @@ import urllib.request
 from unittest.mock import Mock
 
 from PIL import Image
-from browser_bridge import BrowserBridge, BrowserError, gemini_url
+from browser_bridge import BrowserBridge, BrowserError, gemini_url, origin_url
 from core import Store, png_bytes
 from server import make_server
+from test_workflow import artwork
 
 
 AGENT = 'chrome-test-agent-0001'
@@ -83,6 +84,27 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(gemini_url('https://aistudio.google.com/u/2/prompts/12345'), 'https://aistudio.google.com/u/2/prompts/12345')
         self.assertIn('canva.com', gemini_url('https://www.canva.com/design/DAHa8kUkuLo/NKq0irljjr17Cx37SmYEQw/edit'))
 
+    def test_origin_uses_empty_payload_and_configured_chat(self):
+        def generate():
+            self.results.append(self.bridge.generate('p', 'origin', 'new', 'text', self.raw,
+                'https://aistudio.google.com/u/2/prompts/saved?foo=bar', '', lambda _: None))
+        thread = threading.Thread(target=generate)
+        thread.start()
+        try:
+            for _ in range(100):
+                task = self.bridge.poll(AGENT)
+                if task: break
+                time.sleep(.01)
+            self.assertEqual(task['image'], '')
+            self.assertEqual(task['url'], 'https://aistudio.google.com/u/2/prompts/saved?foo=bar')
+            self.bridge.report(task['id'], task['lease'], AGENT, image=base64.b64encode(self.raw).decode())
+        finally:
+            self.bridge.cancel('p')
+            thread.join(4)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(origin_url('https://aistudio.google.com/prompts/saved'),
+                         'https://aistudio.google.com/prompts/saved')
+
     def test_timeout_does_not_reissue(self):
         self.bridge.timeout=.1
         thread=self.start();task=self.bridge.poll(AGENT);thread.join(3)
@@ -99,7 +121,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             store.key=''
             self.assertEqual(store.config['mode'],'browser')
             store.browser.poll(AGENT)
-            raw=png_bytes(Image.new('RGB',(32,32),'white'))
+            raw=png_bytes(artwork())
             project=store.create('web-test',raw)
             pid=project['id']
             for action in ['patch','color']:
@@ -110,7 +132,7 @@ class BrowserWorkflowTests(unittest.TestCase):
                     if task:break
                     time.sleep(.01)
                 self.assertIsNotNone(task)
-                store.browser.report(task['id'],task['lease'],AGENT,image=base64.b64encode(raw).decode(),page_url='https://gemini.google.com/app/test')
+                store.browser.report(task['id'],task['lease'],AGENT,image=base64.b64encode(png_bytes(artwork('color' if action == 'color' else 'patch'))).decode(),page_url='https://gemini.google.com/app/test')
                 for _ in range(100):
                     if store.jobs[pid]['status']!='running':break
                     time.sleep(.01)
@@ -128,7 +150,7 @@ class BrowserWorkflowTests(unittest.TestCase):
             api_client=Mock()
             store=Store(tmp,api_client);store.key='present-but-must-not-be-used'
             store.browser.poll(AGENT)
-            p=store.create('fail',png_bytes(Image.new('RGB',(16,16))))
+            p=store.create('fail',png_bytes(artwork()))
             store.run(p['id'],'patch')
             for _ in range(100):
                 task=store.browser.poll(AGENT)

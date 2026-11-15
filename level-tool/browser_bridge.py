@@ -7,11 +7,21 @@ import copy
 import secrets
 import threading
 import time
+import re
 from urllib.parse import urlparse
 
 
 class BrowserError(Exception):
     pass
+
+
+def origin_url(value):
+    """Validate the independently configured step-1 URL without replacing its chat."""
+    checked = gemini_url(value)
+    if urlparse(checked).netloc != 'aistudio.google.com':
+        raise BrowserError('Bước 1 cần URL Google AI Studio.')
+    return checked
+
 
 
 def gemini_url(value):
@@ -115,6 +125,9 @@ class BrowserBridge:
             return found
 
     def generate(self, project_id, stage, name, prompt, png, url, email, progress):
+        if stage == 'origin':
+            png = b''
+            url = origin_url(url)
         with self.lock:
             if not self.status()['connected']:
                 raise BrowserError('Chưa kết nối tiện ích Chrome. Mở Studio trong Chrome đã cài tiện ích và giữ tab đó mở.')

@@ -16,13 +16,17 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from PIL import Image, ImageOps, UnidentifiedImageError
-from browser_bridge import BrowserBridge, BrowserError, gemini_url
+from PIL import Image, ImageOps, ImageStat, UnidentifiedImageError
+from browser_bridge import BrowserBridge, BrowserError, gemini_url, origin_url
 
 DEFAULT_MODEL = 'gemini-nano-banana-2.1'
-ORIGIN_PROMPT = ('A beautiful peaceful natural landscape with mountains, a clear blue lake, green pine trees, '
+PREVIOUS_ORIGIN_PROMPT = ('A beautiful peaceful natural landscape with mountains, a clear blue lake, green pine trees, '
                  'blooming flowers, cute anime style, clean vector lines, cel shading, bright and vivid colors, '
-                 'landscape aspect ratio 3:2 (width:height).')
+                 'square aspect ratio 1:1, image dimensions 1024 x 1024 pixels.')
+ORIGIN_PROMPT = 'A beautiful peaceful natural, square image, 1024 × 1024 px.'
+LEGACY_ORIGIN_PROMPT = PREVIOUS_ORIGIN_PROMPT.replace(
+    'square aspect ratio 1:1, image dimensions 1024 x 1024 pixels.',
+    'landscape aspect ratio 3:2 (width:height).')
 PATCH_PROMPT = ('Đây là ảnh đường nét đen. Các nét phác thảo khá tốt nhưng một số vùng chưa được bao kín do đường nét bị hở. '
                 'Hãy nối hoặc kéo dài các đường nét đó để vá kín nét vẽ.')
 COLOR_PROMPT = ('Color this exact repaired line-art coloring page with bright, harmonious flat colors '
@@ -30,7 +34,7 @@ COLOR_PROMPT = ('Color this exact repaired line-art coloring page with bright, h
                 'and canvas aspect ratio. Do not redraw or add/remove details. Return the colored image.')
 AISTUDIO_COLOR_PROMPT = 'tô màu tranh sau'
 CANVA_URL = 'https://www.canva.com/design/DAHa8kUkuLo/NKq0irljjr17Cx37SmYEQw/edit'
-GLOBAL_OUTPUT_DIR = Path(r'F:\noichuagit\FillColoring_LevelData\output')
+GLOBAL_OUTPUT_DIR = Path(__file__).resolve().parent.parent / 'output'
 
 SUFFIX = {
     'origin': 'colored_origin',
@@ -100,6 +104,31 @@ def png_bytes(im):
     return out.getvalue()
 
 
+def validate_artwork(image, stage):
+    """Inspect visible pixels, never hidden RGB in transparent PNG backgrounds."""
+    rgb = white_rgb(image)
+    rgb.thumbnail((512, 512))
+    gray = ImageOps.grayscale(rgb)
+    hist = gray.histogram()
+    total = rgb.width * rgb.height
+    dark = sum(hist[:96]) / total
+    light = sum(hist[192:]) / total
+    if max(ImageStat.Stat(rgb).stddev) < 5 or dark > .98 or light > .999:
+        raise WorkflowError('Ảnh rỗng hoặc gần như toàn đen/trắng. Hãy lấy đúng ảnh kết quả, không dùng canvas/thumbnail trống.')
+    data = rgb.tobytes()
+    pixels = zip(data[0::3], data[1::3], data[2::3])
+    colored = sum(max(p) - min(p) > 24 for p in pixels) / total
+    if stage in ('origin', 'color') and colored < .01:
+        raise WorkflowError('Ảnh màu chưa được tô màu; kết quả vẫn là ảnh nét. Hãy lấy ảnh đầu ra của AI.')
+    if stage in ('source', 'patch', 'transparent'):
+        if dark < .001 or light < .2 or colored > .05:
+            raise WorkflowError('Ảnh line phải có nét đen trên nền trắng hoặc trong suốt. Hãy kiểm tra đúng bước xử lý.')
+    if stage == 'transparent':
+        alpha = image.convert('RGBA').getchannel('A')
+        if alpha.getextrema()[0] > 10:
+            raise WorkflowError('Ảnh line cuối chưa được xóa nền.')
+
+
 def protect_secret(value, decrypt=False):
     if os.name != 'nt':
         raise WorkflowError('Lưu khóa được mã hóa chỉ hỗ trợ Windows; hãy dùng khóa trong phiên này.')
@@ -134,9 +163,11 @@ class Gemini:
         model = model.removeprefix('models/')
         if not re.fullmatch(r'[A-Za-z0-9._-]+', model):
             raise WorkflowError('Tên model không hợp lệ.')
-        payload = {'contents': [{'role': 'user', 'parts': [
-            {'text': prompt}, {'inlineData': {'mimeType': 'image/png',
-            'data': base64.b64encode(png_bytes(white_rgb(image))).decode()}}]}],
+        parts = [{'text': prompt}]
+        if image is not None:
+            parts.append({'inlineData': {'mimeType': 'image/png',
+                          'data': base64.b64encode(png_bytes(white_rgb(image))).decode()}})
+        payload = {'contents': [{'role': 'user', 'parts': parts}],
             'generationConfig': {'responseModalities': ['TEXT', 'IMAGE']}}
         req = urllib.request.Request(
             f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent',
@@ -176,9 +207,10 @@ class Gemini:
 
 
 class Store:
-    def __init__(self, root, client=None):
+    def __init__(self, root, client=None, output_dir=None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.output_dir = Path(output_dir) if output_dir is not None else self.root / 'output'
         self.lock = threading.RLock()
         self.client = client or Gemini()
         self.browser = BrowserBridge()
@@ -186,6 +218,7 @@ class Store:
         self.config = {'model': DEFAULT_MODEL, 'origin_prompt': ORIGIN_PROMPT,
                        'patch_prompt': PATCH_PROMPT, 'color_prompt': COLOR_PROMPT,
                        'aistudio_color_prompt': AISTUDIO_COLOR_PROMPT,
+                       'aistudio_origin_url': 'https://aistudio.google.com/u/2/prompts/new_chat',
                        'mode': 'browser', 'browser_url': 'https://gemini.google.com/u/2/app',
                        'aistudio_url': 'https://aistudio.google.com/u/2/prompts/1wN9BKl3arwh3KcwLRU01EaNeB7JoSw7o',
                        'canva_url': CANVA_URL,
@@ -194,6 +227,8 @@ class Store:
         config_path = self.root / 'settings.json'
         if config_path.exists():
             self.config.update(json.loads(config_path.read_text(encoding='utf-8')))
+        if self.config.get('origin_prompt') in (LEGACY_ORIGIN_PROMPT, PREVIOUS_ORIGIN_PROMPT):
+            self.config['origin_prompt'] = ORIGIN_PROMPT
         secret = self.root / 'api-key.dpapi'
         self.key_error = ''
         if secret.exists() and not self.key:
@@ -217,6 +252,11 @@ class Store:
                 try:
                     candidate['browser_url'] = gemini_url(data['browser_url'].strip())
                 except (BrowserError, AttributeError) as exc:
+                    raise WorkflowError(str(exc)) from None
+            if 'aistudio_origin_url' in data:
+                try:
+                    candidate['aistudio_origin_url'] = origin_url(str(data['aistudio_origin_url']).strip())
+                except BrowserError as exc:
                     raise WorkflowError(str(exc)) from None
             if 'aistudio_url' in data:
                 val = str(data['aistudio_url']).strip()
@@ -247,7 +287,6 @@ class Store:
                     if not value or len(value) > 12000:
                         raise WorkflowError('Model và prompt không được để trống hoặc quá dài.')
                     candidate[field] = value
-            self.config = candidate
             if data.get('forget_key'):
                 self.key = ''
                 (self.root / 'api-key.dpapi').unlink(missing_ok=True)
@@ -258,7 +297,8 @@ class Store:
                 (self.root / 'api-key.dpapi').write_bytes(protect_secret(self.key.encode()))
             elif 'remember' in data and not data['remember']:
                 (self.root / 'api-key.dpapi').unlink(missing_ok=True)
-            atomic_json(self.root / 'settings.json', self.config)
+            atomic_json(self.root / 'settings.json', candidate)
+            self.config = candidate
             return self.settings()
 
     def directory(self, pid):
@@ -268,7 +308,10 @@ class Store:
 
     def load(self, pid):
         try:
-            return json.loads((self.directory(pid) / 'project.json').read_text(encoding='utf-8'))
+            project = json.loads((self.directory(pid) / 'project.json').read_text(encoding='utf-8'))
+            for stage in SUFFIX:
+                project['versions'].setdefault(stage, [])
+            return project
         except FileNotFoundError:
             raise WorkflowError('Không tìm thấy tranh.') from None
 
@@ -287,6 +330,7 @@ class Store:
             return sorted(result, key=lambda p: p['updated_at'], reverse=True)
 
     def add_version(self, project, stage, image, parent=None, metadata=None):
+        validate_artwork(image, stage)
         versions = project['versions'][stage]
         vid = uuid.uuid4().hex[:12]
         file = f'assets/{project["name"]}_{SUFFIX[stage]}_v{len(versions)+1:03d}_{vid}.png'
@@ -334,6 +378,11 @@ class Store:
             raise WorkflowError('Tranh này đang xử lý. Hãy chờ bước hiện tại hoàn tất.')
 
     def invalidate(self, project, stage):
+        if stage in ('origin', 'source'):
+            downstream = ('source', 'patch', 'color', 'transparent') if stage == 'origin' else ('patch', 'color', 'transparent')
+            for child in downstream:
+                project['selected'].pop(child, None)
+                project['approved'].pop(child, None)
         if stage == 'patch':
             project['approved'].pop('patch', None)
             project['approved'].pop('color', None)
@@ -348,6 +397,8 @@ class Store:
             self.ensure_idle(pid)
             project = self.load(pid)
             record = self.version(project, stage, vid)
+            if stage == 'patch' and record['parent'] != project['selected'].get('source'):
+                raise WorkflowError('Line đã vá thuộc ảnh nguồn khác. Hãy chọn lại ảnh nguồn tương ứng.')
             if stage in ('color', 'transparent') and record['parent'] != project['selected'].get('patch'):
                 raise WorkflowError('Ảnh thuộc một phiên bản line khác. Hãy chọn lại line tương ứng trước.')
             if stage not in SUFFIX:
@@ -365,6 +416,7 @@ class Store:
                 raise WorkflowError('Bước duyệt không hợp lệ.')
             project = self.load(pid)
             record = self.version(project, stage)
+            validate_artwork(self.image(project, record), stage)
             if stage == 'color':
                 self.approved_patch(project)
                 if record['parent'] != project['selected']['patch']:
@@ -375,6 +427,7 @@ class Store:
 
     def approved_patch(self, project):
         patch = self.version(project, 'patch')
+        validate_artwork(self.image(project, patch), 'patch')
         if project['approved'].get('patch') != patch['id']:
             raise WorkflowError('Hãy kiểm tra và duyệt ảnh line đã vá trước.')
         return patch
@@ -416,6 +469,7 @@ class Store:
             elif action == 'patch':
                 if not project['selected'].get('source'):
                     raise WorkflowError('Chưa có ảnh nét cơ bản để vá. Hãy chạy bước 2 hoặc tải ảnh nét lên trước.')
+                validate_artwork(self.image(project, self.version(project, 'source')), 'source')
             if action != 'transparent':
                 if self.config['mode'] == 'api' and not self.key:
                     raise WorkflowError('Mở Cài đặt và nhập Gemini API key để chạy bước AI.')
@@ -484,7 +538,8 @@ class Store:
                 else:
                     if act == 'origin':
                         prompt = config.get('origin_prompt', ORIGIN_PROMPT)
-                        target_url = config.get('aistudio_url') or 'https://aistudio.google.com'
+                        prompt += '\nOutput requirement: one square image, 1024 x 1024 pixels (1:1). Generate from text only.'
+                        target_url = config['aistudio_origin_url']
                     elif act == 'canva-line':
                         prompt = ''
                         target_url = config.get('canva_url', CANVA_URL)
@@ -517,6 +572,12 @@ class Store:
                     image = read_image(raw)
                     image.save(raw_path, format='PNG')
                     metadata.update(prompt=prompt, raw_file=raw_rel, original_size=list(image.size))
+                    if stage == 'origin':
+                        if image.width != image.height:
+                            raise WorkflowError(f'Bước 1 cần ảnh vuông 1024 x 1024. AI trả ảnh không vuông; bản gốc được giữ tại {raw_rel}. Hãy đặt tỷ lệ 1:1 trong AI Studio rồi thử lại.')
+                        if image.size != (1024, 1024):
+                            image = image.resize((1024, 1024), Image.Resampling.LANCZOS)
+                            metadata['resized_to_origin_size'] = True
                     if source and image.size != source.size:
                         ratio_error = abs((image.width / image.height) / (source.width / source.height) - 1)
                         if ratio_error > .01:
@@ -549,6 +610,8 @@ class Store:
                 raise WorkflowError('Ảnh màu và ảnh line phải cùng một phiên bản line đã vá.')
             if (color['width'], color['height']) != (line['width'], line['height']):
                 raise WorkflowError('Kích thước hai ảnh cuối không khớp.')
+            for record in (color, line):
+                validate_artwork(self.image(project, record), record['stage'])
             export_id = datetime.now().strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex[:6]
             relative = f'exports/{export_id}'
             directory = self.directory(pid) / relative
@@ -561,7 +624,7 @@ class Store:
                         'width': line['width'], 'height': line['height']})
 
             # Export directly to global output directory F:\noichuagit\FillColoring_LevelData\output
-            global_out = GLOBAL_OUTPUT_DIR
+            global_out = self.output_dir
             global_out.mkdir(parents=True, exist_ok=True)
             for record in (color, line):
                 (global_out / f'{project["name"]}_{SUFFIX[record["stage"]]}.png').write_bytes(

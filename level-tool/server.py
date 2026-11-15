@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import base64
 import json
 import mimetypes
@@ -13,10 +14,12 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from core import Store, WorkflowError
+from core import Store, WorkflowError, GLOBAL_OUTPUT_DIR
 from browser_bridge import BrowserError
 
 HERE = Path(__file__).resolve().parent
+SERVER_REVISION = hashlib.sha256(b''.join((HERE / name).read_bytes() for name in
+    ('server.py', 'core.py', 'browser_bridge.py'))).hexdigest()
 
 
 def make_server(store, port=0):
@@ -51,7 +54,8 @@ def make_server(store, port=0):
             path = urllib.parse.urlparse(self.path).path
             try:
                 if path == '/api/health':
-                    return self.send({'app': 'FillColoring Studio', 'version': 2})
+                    return self.send({'app': 'FillColoring Studio', 'version': 3,
+                                      'revision': SERVER_REVISION, 'pid': os.getpid()})
                 if path == '/api/state':
                     with store.lock:
                         return self.send({'projects': store.list(), 'jobs': store.jobs, 'settings': store.settings(),
@@ -127,7 +131,7 @@ def make_server(store, port=0):
                     result = store.cleanup(pid, data.get('mode', 'raw'))
                 elif path == '/api/open-folder':
                     if data.get('output'):
-                        folder = Path(r'F:\noichuagit\FillColoring_LevelData\output')
+                        folder = store.output_dir
                         folder.mkdir(parents=True, exist_ok=True)
                     else:
                         project = store.load(pid)
@@ -155,9 +159,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
     parser.add_argument('--data', type=Path, default=HERE / 'data')
+    parser.add_argument('--output', type=Path, default=GLOBAL_OUTPUT_DIR)
     parser.add_argument('--no-browser', action='store_true')
     args = parser.parse_args()
-    store = Store(args.data)
+    store = Store(args.data, output_dir=args.output)
     server = make_server(store, args.port)
     url = f'http://127.0.0.1:{server.server_port}'
     print(f'FillColoring Studio: {url}', flush=True)

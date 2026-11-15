@@ -10,9 +10,22 @@ import urllib.request
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
-from core import Store, WorkflowError, Gemini, png_bytes, transparent_line, protect_secret
+from PIL import Image, ImageDraw
+from core import Store, WorkflowError, Gemini, png_bytes, transparent_line, protect_secret, PATCH_PROMPT, validate_artwork, white_rgb, ORIGIN_PROMPT, LEGACY_ORIGIN_PROMPT
 from server import make_server
+
+
+EXAMPLE = Path(__file__).resolve().parents[2] / 'example'
+
+
+def artwork(stage='patch', size=(32, 32)):
+    image = Image.new('RGBA', size, 'white')
+    draw = ImageDraw.Draw(image)
+    w, h = size
+    draw.rectangle((w//4, h//4, 3*w//4, 3*h//4),
+                   fill='orange' if stage == 'color' else 'white', outline='black', width=2)
+    return image
+
 
 
 class FakeGemini:
@@ -25,7 +38,7 @@ class FakeGemini:
         self.calls += 1
         if self.fail:
             raise WorkflowError('Lỗi API thử nghiệm')
-        return png_bytes(Image.new('RGB', self.size or image.size, 'white')), {'model': 'fake'}
+        return png_bytes(artwork('patch' if prompt == PATCH_PROMPT else 'color', self.size or image.size)), {'model': 'fake'}
 
 
 class WorkflowTests(unittest.TestCase):
@@ -35,7 +48,7 @@ class WorkflowTests(unittest.TestCase):
         self.store = Store(self.temp.name, self.client)
         self.store.config['mode'] = 'api'
         self.store.key = 'test-secret'
-        self.raw = png_bytes(Image.new('RGB', (32, 32), 'white'))
+        self.raw = png_bytes(artwork())
         self.p = self.store.create('tranh mẫu', self.raw)
         self.pid = self.p['id']
 
@@ -108,7 +121,7 @@ class WorkflowTests(unittest.TestCase):
         self.store.import_version(self.pid, 'patch', self.raw)
         self.store.approve(self.pid, 'patch')
         self.run_stage('transparent')
-        self.store.import_version(self.pid, 'color', self.raw)
+        self.store.import_version(self.pid, 'color', png_bytes(artwork('color')))
         self.store.approve(self.pid, 'color')
         self.store.export(self.pid)
         with self.assertRaises(WorkflowError): self.store.run(self.pid, 'color')
@@ -132,6 +145,131 @@ class WorkflowTests(unittest.TestCase):
         result = transparent_line(image)
         self.assertEqual(list(result.getchannel('A').tobytes()), [0,255,127,0])
         self.assertEqual(transparent_line(result).tobytes(), result.tobytes())
+
+    def test_rejects_blank_results_preserves_previous_version_and_raw(self):
+        self.prepare()
+        before = self.store.load(self.pid)
+        for fill in ('white', 'black', (0, 0, 0, 0)):
+            with patch.object(self.client, 'generate', return_value=(
+                    png_bytes(Image.new('RGBA', (32, 32), fill)), {})):
+                self.store.run(self.pid, 'patch')
+                self.assertEqual(self.wait()['status'], 'error')
+                after = self.store.load(self.pid)
+                self.assertEqual(after['selected'], before['selected'])
+                self.assertEqual(after['approved'], before['approved'])
+        self.assertEqual(len(list((self.store.directory(self.pid) / 'raw').glob('*.png'))), 4)
+
+    def test_color_rejects_line_and_export_rechecks_old_files(self):
+        self.prepare()
+        with self.assertRaises(WorkflowError):
+            self.store.import_version(self.pid, 'color', self.raw)
+        self.run_stage('finish')
+        self.store.approve(self.pid, 'color')
+        p = self.store.load(self.pid)
+        record = self.store.version(p, 'color')
+        Image.new('RGB', (32, 32), 'white').save(self.store.directory(self.pid) / record['file'])
+        with self.assertRaises(WorkflowError): self.store.export(self.pid)
+        self.assertFalse(self.store.output_dir.exists())
+
+    def test_examples_and_transparency_composite(self):
+        for stage, filename in [('origin','picture_colored_origin.jpg'),
+                                ('source','picture_line_notpatch.png'),
+                                ('patch','picture_line_pathched.png'),
+                                ('color','picture_colored_final.png'),
+                                ('transparent','picture_line_final.png')]:
+            with Image.open(EXAMPLE / filename) as image:
+                validate_artwork(image, stage)
+        with Image.open(EXAMPLE / 'picture_line_pathched.png') as image:
+            result = transparent_line(image)
+            validate_artwork(result, 'transparent')
+            self.assertEqual(white_rgb(result).convert('L').tobytes(), white_rgb(image).convert('L').tobytes())
+
+    def test_full_resolution_example_export(self):
+        p = self.store.create('example-check', (EXAMPLE / 'picture_colored_origin.jpg').read_bytes(), 'origin')
+        pid = p['id']
+        self.store.import_version(pid, 'source', (EXAMPLE / 'picture_line_notpatch.png').read_bytes())
+        self.store.import_version(pid, 'patch', (EXAMPLE / 'picture_line_pathched.png').read_bytes())
+        self.store.approve(pid, 'patch')
+        self.store.import_version(pid, 'color', (EXAMPLE / 'picture_colored_final.png').read_bytes())
+        self.store.approve(pid, 'color')
+        self.store.jobs[pid] = {'status': 'running'}
+        self.store._worker(pid, 'transparent', '', self.store.config.copy())
+        self.assertEqual(self.store.jobs[pid]['status'], 'done')
+        self.store.export(pid)
+        self.assertEqual(len(list(self.store.output_dir.glob('*.png'))), 5)
+        for stage in ('color', 'transparent'):
+            p = self.store.load(pid)
+            record = self.store.version(p, stage)
+            self.assertEqual((record['width'], record['height']), (1024, 1024))
+            validate_artwork(self.store.image(p, record), stage)
+
+    def test_origin_only_text_and_exact_square_output(self):
+        # Even when this project already contains a source image, origin has no input.
+        self.store.config['mode'] = 'browser'
+        self.store.browser.status = lambda: {'connected': True}
+        with patch.object(self.store.browser, 'generate', return_value=(
+                png_bytes(artwork('color', (512,512))), {})) as generate:
+            self.run_stage('origin')
+            args = generate.call_args.args
+            self.assertEqual(args[1], 'origin')
+            self.assertEqual(args[4], b'')
+            self.assertIn('1024 x 1024', args[3])
+        p = self.store.load(self.pid)
+        record = self.store.version(p, 'origin')
+        self.assertEqual((record['width'], record['height']), (1024,1024))
+        self.assertEqual(record['metadata']['original_size'], [512,512])
+        self.assertIsNone(record['parent'])
+        with patch.object(self.store.browser, 'generate', return_value=(
+                png_bytes(artwork('color', (512,256))), {})):
+            self.store.run(self.pid, 'origin')
+            self.assertEqual(self.wait()['status'], 'error')
+        self.assertEqual(self.store.load(self.pid)['selected']['origin'], record['id'])
+
+    def test_old_default_migrates_but_custom_prompt_survives(self):
+        path = Path(self.temp.name) / 'settings.json'
+        path.write_text(json.dumps({'origin_prompt': LEGACY_ORIGIN_PROMPT}), encoding='utf-8')
+        self.assertEqual(Store(self.temp.name).settings()['origin_prompt'], ORIGIN_PROMPT)
+        path.write_text(json.dumps({'origin_prompt': 'A kitten'}), encoding='utf-8')
+        self.assertEqual(Store(self.temp.name).settings()['origin_prompt'], 'A kitten')
+
+    def test_separate_aistudio_urls_persist_and_route(self):
+        origin = 'https://aistudio.google.com/u/1/prompts/origin-chat'
+        color = 'https://aistudio.google.com/u/2/prompts/color-chat'
+        self.store.save_settings({'aistudio_origin_url': origin, 'aistudio_url': color})
+        restored = Store(self.temp.name)
+        self.assertEqual(restored.config['aistudio_origin_url'], origin)
+        self.assertEqual(restored.config['aistudio_url'], color)
+        with self.assertRaises(WorkflowError):
+            self.store.save_settings({'aistudio_origin_url': 'https://gemini.google.com/app'})
+        self.store.config['mode'] = 'browser'
+        self.store.browser.status = lambda: {'connected': True}
+        with patch.object(self.store.browser, 'generate', return_value=(png_bytes(artwork('color')), {})) as generate:
+            self.run_stage('origin')
+            self.assertEqual(generate.call_args.args[5], origin)
+            self.assertEqual(generate.call_args.args[4], b'')
+            self.store.import_version(self.pid, 'source', self.raw)
+            self.store.import_version(self.pid, 'patch', self.raw)
+            self.store.approve(self.pid, 'patch')
+            self.run_stage('color-aistudio')
+            self.assertEqual(generate.call_args.args[5], color)
+            self.assertTrue(generate.call_args.args[4])
+
+    def test_source_change_invalidates_downstream(self):
+        self.prepare()
+        self.run_stage('finish')
+        self.store.import_version(self.pid, 'source', self.raw)
+        p = self.store.load(self.pid)
+        self.assertEqual(set(p['selected']), {'source'})
+        self.assertFalse(p['approved'])
+        self.assertTrue(p['versions']['color'])
+
+    def test_export_stays_inside_test_directory(self):
+        self.prepare()
+        self.run_stage('finish')
+        self.store.approve(self.pid, 'color')
+        self.store.export(self.pid)
+        self.assertEqual(self.store.output_dir, Path(self.temp.name) / 'output')
+        self.assertEqual(len(list(self.store.output_dir.glob('*.png'))), 4)
 
     def test_duplicate_names_and_bad_paths(self):
         p2 = self.store.create('tranh mẫu', self.raw)
@@ -188,6 +326,14 @@ class APITests(unittest.TestCase):
         self.assertNotIn('secret', captured[0].full_url)
         self.assertEqual(json.loads(captured[0].data)['generationConfig']['responseModalities'], ['TEXT','IMAGE'])
 
+    def test_origin_api_without_input_image(self):
+        response = {'candidates':[{'content':{'parts':[{'inlineData':{
+            'data':base64.b64encode(png_bytes(artwork('color'))).decode()}}]}}]}
+        with patch('urllib.request.urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as mock:
+            Gemini().generate('secret','test','create a picture',None)
+            parts = json.loads(mock.call_args.args[0].data)['contents'][0]['parts']
+            self.assertEqual(parts, [{'text':'create a picture'}])
+
     def test_no_image_response_and_no_retry(self):
         response={'candidates':[{'finishReason':'NO_IMAGE','content':{'parts':[{'text':'No image'}]}}]}
         with patch('urllib.request.urlopen', return_value=io.BytesIO(json.dumps(response).encode())) as mock:
@@ -207,7 +353,7 @@ class APITests(unittest.TestCase):
             try:
                 page=urllib.request.urlopen(url).read().decode()
                 token=page.split('name="app-token" content="')[1].split('"')[0]
-                data=json.dumps({'name':'test','image':base64.b64encode(png_bytes(Image.new('RGB',(8,8)))).decode()}).encode()
+                data=json.dumps({'name':'test','image':base64.b64encode(png_bytes(artwork())).decode()}).encode()
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     urllib.request.urlopen(urllib.request.Request(url+'/api/create',data=data))
                 self.assertEqual(caught.exception.code,403)
