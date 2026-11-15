@@ -1,12 +1,12 @@
 /* Operates visible Canva editor UI.
  * Step 2:
- * 1. Clear old image on page 1 (click vào tranh, nhấn DEL để xóa -> trang trắng).
- * 2. Upload / paste color origin image ([picture_name]_colored_origin).
- * 3. Kéo / đặt ảnh vừa 4 góc trang canvas.
- * 4. Click vào ảnh để chọn -> hiện nút "Chỉnh sửa" trên thanh công cụ -> click "Chỉnh sửa" -> hiện cửa sổ "Sửa hình ảnh".
- * 5. Trong "Khớp định dạng", click "Nghệ thuật đường nét" (Line art).
- * 6. Chờ Canva xử lý xong hiệu ứng nét đen.
- * 7. Trích xuất ảnh line art và gửi về FillColoring Studio dưới tên [picture_name]_line_notpatch.png.
+ * 1. Xóa ảnh cũ: Click vào tranh, nhấn DEL để xóa -> thu được 1 trang trắng.
+ * 2. Đưa ảnh màu gốc vào Canva (chỉ 1 ảnh, không lặp lại).
+ * 3. Chuột phải vào ảnh -> chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn" (hoặc Đặt hình ảnh làm nền).
+ * 4. Click chọn ảnh -> nhấn nút "Chỉnh sửa" trên thanh công cụ -> hiện cửa sổ "Sửa hình ảnh".
+ * 5. Trong mục "Khớp định dạng", nhấn "Nghệ thuật đường nét" (Line art).
+ * 6. Chờ tranh được chuyển đổi nét đen hoàn tất (xuất hiện nút Đặt lại kiểu, hết spinner).
+ * 7. Tải / trích xuất ảnh nét và gửi về Studio dưới tên [picture_name]_line_notpatch.png.
  */
 (() => {
   'use strict';
@@ -77,7 +77,7 @@
       Object.assign(banner.style, {
         position: 'fixed', bottom: '16px', right: '16px', zIndex: '2147483647',
         background: '#00c4cc', color: '#0e1318', padding: '12px 20px', borderRadius: '10px',
-        fontWeight: 'bold', font: '13px Segoe UI, sans-serif', maxWidth: '540px', pointerEvents: 'none',
+        fontWeight: 'bold', font: '13px Segoe UI, sans-serif', maxWidth: '560px', pointerEvents: 'none',
         boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
       });
       document.body.append(banner);
@@ -168,41 +168,38 @@
     }
   }
 
-  // Step 2.1: Click vào tranh, nhấn DEL để xóa ảnh cũ -> trang trắng
+  // Bước 1: Click vào tranh cũ và nhấn DEL để xóa -> trang trắng
   async function clearOldImage() {
-    showStatus('Bước 2.1: Đang chọn ảnh cũ và nhấn DEL để xóa (thu trang trắng)…');
+    showStatus('Bước 1: Đang click vào tranh cũ và nhấn DEL để xóa (thu trang trắng)…');
     const center = getPageCenter();
 
-    // 1. Click center of canvas to select old element
+    // Click vào tranh
     clickAt(center.x, center.y);
     await sleep(400);
 
-    // 2. Press Delete key
+    // Nhấn DEL
     sendDeleteKeys();
     await sleep(300);
 
-    // 3. If delete button on floating bar is visible, click it too
+    // Nếu thanh nổi có nút xóa, click luôn
     const delBtn = querySelectorAllDeep('button, [role="button"]').find(el => {
       if (!visible(el)) return false;
       const aria = (el.getAttribute('aria-label') || '').trim();
-      const title = (el.getAttribute('title') || '').trim();
       const text = (el.innerText || el.textContent || '').trim();
-      return /^(?:xóa ảnh|xóa|delete)$/i.test(aria) ||
-             /^(?:xóa ảnh|xóa|delete)$/i.test(title) ||
-             /^(?:xóa ảnh|xóa|delete)$/i.test(text);
+      return /^(?:xóa ảnh|xóa|delete)$/i.test(aria) || /^(?:xóa ảnh|xóa|delete)$/i.test(text);
     });
     if (delBtn) {
       delBtn.click();
-      await sleep(400);
+      await sleep(300);
     }
 
     sendDeleteKeys();
     await sleep(600);
   }
 
-  // Step 2.2: Đưa ảnh màu gốc vào Canva
+  // Bước 2: Đưa duy nhất 1 ảnh màu gốc vào Canva (không lặp lại)
   async function uploadImage() {
-    showStatus('Bước 2.2: Đang đưa ảnh màu gốc vào Canva…');
+    showStatus('Bước 2: Đang đưa ảnh màu gốc vào Canva (1 ảnh duy nhất)…');
     const bytes = Uint8Array.from(atob(task.image), c => c.charCodeAt(0));
     const filename = task.filename || 'origin.png';
     const file = new File([bytes], filename, { type: 'image/png' });
@@ -212,50 +209,68 @@
     const center = getPageCenter();
     const stage = document.elementFromPoint(center.x, center.y) || getCanvasStage();
 
+    // Chỉ dùng DragEvent (drop), KHÔNG dispatch thêm ClipboardEvent (paste) để tránh bị nhân đôi ảnh
     stage.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
     stage.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
     stage.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
 
-    try {
-      const pasteEvent = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
-      (document.activeElement || stage).dispatchEvent(pasteEvent);
-    } catch (_) {}
-
-    await sleep(3000);
+    await sleep(2500);
   }
 
-  // Step 2.2b: Đặt / kéo ảnh vừa với 4 góc trang
-  async function fitImageToPage() {
-    showStatus('Bước 2.2b: Đang khớp ảnh vừa với 4 góc trang…');
+  // Bước 3: Chuột phải chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn" (hoặc Đặt hình ảnh làm nền)
+  async function resizeCanvasToFit() {
+    showStatus('Bước 3: Chuột phải -> Đổi cỡ khung vẽ cho vừa với vùng chọn…');
     const center = getPageCenter();
 
-    // Select the newly placed image
+    // Click chọn ảnh
     clickAt(center.x, center.y);
-    await sleep(400);
+    await sleep(500);
 
-    // Right-click to open context menu and select "Đặt hình ảnh làm nền" (snaps to exact 4 corners)
+    // Chuột phải mở menu ngữ cảnh
     rightClickAt(center.x, center.y);
     await sleep(600);
 
     const menuItems = querySelectorAllDeep('button, [role="menuitem"], [role="button"], div[tabindex="0"], span');
-    const setBgOption = menuItems.find(el => {
+
+    // 1. Ưu tiên: "Đổi cỡ khung vẽ cho vừa với vùng chọn"
+    const resizeOption = menuItems.find(el => {
       if (!visible(el)) return false;
-      const aria = (el.getAttribute('aria-label') || '').trim();
-      const text = (el.innerText || el.textContent || '').trim();
-      return /đặt hình ảnh làm nền|đặt làm nền|set image as background|replace background/i.test(aria) ||
-             /đặt hình ảnh làm nền|đặt làm nền|set image as background|replace background/i.test(text);
+      const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+      return /đổi cỡ khung vẽ cho vừa(?: với)? vùng(?: được)? chọn|resize canvas to fit selection/i.test(text);
     });
 
-    if (setBgOption) {
-      setBgOption.click();
-      await sleep(600);
+    if (resizeOption) {
+      resizeOption.click();
+      await sleep(1000);
+
+      // Nếu có hộp thoại xác nhận đổi cỡ, bấm xác nhận
+      const confirmResize = querySelectorAllDeep('button, [role="button"]').find(el => {
+        if (!visible(el)) return false;
+        const t = (el.innerText || el.textContent || '').trim();
+        return /^(?:đổi cỡ|resize)$/i.test(t);
+      });
+      if (confirmResize) {
+        confirmResize.click();
+        await sleep(800);
+      }
     } else {
-      sendKey('Escape', 'Escape', 27);
+      // 2. Dự phòng: "Đặt hình ảnh làm nền"
+      const setBgOption = menuItems.find(el => {
+        if (!visible(el)) return false;
+        const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+        return /đặt hình ảnh làm nền|đặt làm nền|set image as background/i.test(text);
+      });
+      if (setBgOption) {
+        setBgOption.click();
+        await sleep(600);
+      } else {
+        sendKey('Escape', 'Escape', 27);
+      }
     }
 
-    // Click again to ensure selection handles & toolbar are active
+    // Click lại vào tâm ảnh để đưa ảnh vào trạng thái đang chọn (Selected)
     clickAt(center.x, center.y);
-    await sleep(400);
+    await sleep(500);
   }
 
   function isEditButton(el) {
@@ -264,7 +279,6 @@
     const aria = (el.getAttribute('aria-label') || '').trim();
     const title = (el.getAttribute('title') || '').trim();
 
-    // Exclude Magic tools (Chỉnh sửa Magic)
     if (/magic/i.test(rawText) || /magic/i.test(aria) || /magic/i.test(title)) return false;
 
     const patterns = [
@@ -286,8 +300,6 @@
     for (const el of all) {
       if (isEditButton(el)) return el;
     }
-
-    // Fallback: Locate the toolbar container by looking for sibling buttons like "Thay thế" or "Xóa ảnh"
     for (const el of all) {
       const txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
       if (/^(?:thay thế|xóa ảnh|xóa nền)$/i.test(txt)) {
@@ -300,7 +312,6 @@
         }
       }
     }
-
     return null;
   }
 
@@ -318,28 +329,22 @@
     });
   }
 
-  // Step 2.3 & 2.4: Chọn tranh -> hiện nút Chỉnh sửa -> nhấn nút Chỉnh sửa
+  // Bước 4: Click chọn ảnh -> nhấn nút Chỉnh sửa -> hiện cửa sổ Sửa hình ảnh
   async function openEditPanel() {
-    // If line art option is already visible, edit panel is already open!
-    const alreadyOpen = findLineArtOptionRobust();
-    if (alreadyOpen) return;
+    if (findLineArtOptionRobust()) return;
 
-    showStatus('Bước 2.3: Đang chọn tranh để hiện nút "Chỉnh sửa"…');
+    showStatus('Bước 4: Đang chọn ảnh và nhấn nút "Chỉnh sửa"…');
 
     const editBtn = await waitFor(async () => {
       let btn = findEditButtonRobust();
       if (btn) return btn;
 
-      // Click center of image to put it into selected state
       const center = getPageCenter();
       clickAt(center.x, center.y);
       await sleep(400);
 
-      btn = findEditButtonRobust();
-      if (btn) return btn;
-
-      return null;
-    }, 25, 'Không tìm thấy nút "Chỉnh sửa" trên thanh công cụ ảnh. Hãy click vào tranh trên Canva.');
+      return findEditButtonRobust();
+    }, 25, 'Không tìm thấy nút "Chỉnh sửa". Hãy click vào tranh trên Canva.');
 
     editBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await sleep(200);
@@ -352,14 +357,13 @@
     await sleep(1500);
   }
 
-  // Step 2.5: Trong Khớp định dạng, chọn "Nghệ thuật đường nét"
+  // Bước 5 & 6: Nhấn Nghệ thuật đường nét -> Chờ tranh được chỉnh sửa xong hoàn toàn
   async function applyLineArtStyle() {
-    showStatus('Bước 2.4: Đang tìm và chọn "Nghệ thuật đường nét" trong Khớp định dạng…');
+    showStatus('Bước 5: Đang nhấn vào "Nghệ thuật đường nét" trong Khớp định dạng…');
 
     const lineArtOption = await waitFor(() => {
       let opt = findLineArtOptionRobust();
       if (!opt) {
-        // Scroll the sidebar to reveal "Khớp định dạng" if needed
         const sidebar = document.querySelector('[role="region"], aside, nav, [data-testid*="side-panel"]') || document.body;
         if (sidebar && sidebar.scrollTop !== undefined) sidebar.scrollTop += 200;
         opt = findLineArtOptionRobust();
@@ -367,57 +371,79 @@
       return opt;
     }, 25, 'Không tìm thấy tùy chọn "Nghệ thuật đường nét" trong Khớp định dạng.');
 
-    lineArtOption.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Tìm phần tử có thể click (thẻ bao quanh nút)
+    const clickable = lineArtOption.closest('button, [role="button"], [role="radio"], [role="option"], [tabindex="0"]') || lineArtOption;
+    clickable.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await sleep(400);
 
-    showStatus('Đang áp dụng hiệu ứng "Nghệ thuật đường nét"…');
-    lineArtOption.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-    lineArtOption.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
-    lineArtOption.click();
+    // Click thực tế tại tâm của ô Nghệ thuật đường nét
+    const r = clickable.getBoundingClientRect();
+    clickAt(r.left + r.width / 2, r.top + r.height / 2);
+    clickable.click();
 
-    // Wait for the AI line art filter to process
-    showStatus('Canva đang chuyển tranh sang nét đen…');
+    showStatus('Bước 6: Canva đang chuyển đổi sang nét đen (vui lòng chờ xong mới tải)…');
+    // Chờ tối thiểu 6s để Canva AI filter khởi động
     await sleep(6000);
 
-    // Wait until spinner inside thumbnail or progress bar disappears
+    // Chờ cho đến khi: xuất hiện nút "Đặt lại kiểu" (Reset style) HOẶC hết spinner tải
     await waitFor(() => {
-      // If "Đặt lại kiểu" button is visible, the style has definitely applied!
       const all = querySelectorAllDeep('button, [role="button"], span');
-      const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test(el.innerText || el.textContent || ''));
+      const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test((el.innerText || el.textContent || '').trim()));
       if (resetBtn) return true;
 
-      // Check if spinners inside sidebar are gone
       const spinners = querySelectorAllDeep('[role="progressbar"], [aria-label*="loading"], [aria-label*="đang tải"]').filter(visible);
       return spinners.length === 0;
     }, 45, 'Canva xử lý hiệu ứng nét đen quá lâu.');
 
-    await sleep(2000);
+    // Chờ thêm 3s để khung vẽ hiển thị ảnh nét ổn định
+    showStatus('Canva đã hoàn tất nét vẽ. Đang chuẩn bị tải ảnh…');
+    await sleep(3000);
   }
 
-  // Step 2.6: Trích xuất ảnh line art ([picture_name]_line_notpatch)
-  async function extractLineImage(beforeSrcs) {
-    showStatus('Đang lấy ảnh kết quả Line Art từ Canva…');
+  // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong
+  async function extractLineImage() {
+    showStatus('Bước 7: Đang tải ảnh nét về Studio…');
 
-    // 1. If anchor click intercepted a download blob URL, use it directly
-    if (interceptedDownloadUrl) {
-      try {
-        const b64 = await blobUrlToBase64(interceptedDownloadUrl);
-        if (b64) return b64;
-      } catch (_) {}
+    // 1. Kích hoạt xuất chính thức từ Canva: Chia sẻ -> Tải xuống -> Tải xuống
+    const allButtons = querySelectorAllDeep('button, [role="button"]');
+    const shareBtn = allButtons.find(el => visible(el) && /^(?:chia sẻ|share)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
+    if (shareBtn) {
+      shareBtn.click();
+      await sleep(1000);
+
+      const dlMenuItem = querySelectorAllDeep('button, [role="menuitem"], [role="button"]').find(el =>
+        visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
+      if (dlMenuItem) {
+        dlMenuItem.click();
+        await sleep(1500);
+
+        const confirmDlBtn = querySelectorAllDeep('button, [role="button"]').find(el =>
+          visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
+        if (confirmDlBtn) {
+          confirmDlBtn.click();
+
+          // Chờ bắt link tải file từ hook
+          const b64 = await waitFor(async () => {
+            if (interceptedDownloadUrl) {
+              return await blobUrlToBase64(interceptedDownloadUrl);
+            }
+            return null;
+          }, 35, 'Không nhận được file xuất từ Canva.');
+          if (b64) return b64;
+        }
+      }
     }
 
-    // 2. Check images inside the canvas stage (excluding left sidebar/navigation)
+    // 2. Dự phòng: Kiểm tra ảnh trong canvas stage
     const stage = getCanvasStage();
     const imgs = [...stage.querySelectorAll('img')].filter(img =>
       visible(img) && img.naturalWidth >= 300 && img.naturalHeight >= 300 &&
       !img.closest('nav, aside, [role="region"], [data-testid*="sidebar"], [data-testid*="panel"]')
     );
-
     imgs.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
 
     for (const img of imgs) {
       const src = img.currentSrc || img.src;
-      // Try drawImage to canvas
       try {
         const c = document.createElement('canvas');
         c.width = img.naturalWidth || 1024;
@@ -425,12 +451,9 @@
         const ctx = c.getContext('2d');
         ctx.drawImage(img, 0, 0);
         const dataUrl = c.toDataURL('image/png');
-        if (dataUrl && dataUrl.length > 500) {
-          return dataUrl.split(',')[1];
-        }
+        if (dataUrl && dataUrl.length > 2000) return dataUrl.split(',')[1];
       } catch (_) {}
 
-      // Try fetching blob directly
       if (src && (src.startsWith('blob:') || src.startsWith('https://'))) {
         try {
           const res = await fetch(src, { credentials: 'include' });
@@ -442,44 +465,6 @@
             return btoa(bin);
           }
         } catch (_) {}
-      }
-    }
-
-    // 3. Check canvas elements on stage
-    const canvases = [...stage.querySelectorAll('canvas')].filter(c => c.width >= 400 && c.height >= 400);
-    for (const canvas of canvases) {
-      try {
-        const dataUrl = canvas.toDataURL('image/png');
-        if (dataUrl && dataUrl.length > 2000) {
-          return dataUrl.split(',')[1];
-        }
-      } catch (_) {}
-    }
-
-    // 4. Fallback: Trigger Canva native "Chia sẻ" -> "Tải xuống"
-    showStatus('Đang kích hoạt Chia sẻ -> Tải xuống từ Canva…');
-    const allButtons = querySelectorAllDeep('button, [role="button"]');
-    const shareBtn = allButtons.find(el => visible(el) && /chia sẻ|share/i.test(el.innerText || el.textContent || el.getAttribute('aria-label') || ''));
-    if (shareBtn) {
-      shareBtn.click();
-      await sleep(1000);
-      const dlMenuItem = querySelectorAllDeep('button, [role="menuitem"], [role="button"]').find(el =>
-        visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-      if (dlMenuItem) {
-        dlMenuItem.click();
-        await sleep(1500);
-        const confirmDlBtn = querySelectorAllDeep('button, [role="button"]').find(el =>
-          visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-        if (confirmDlBtn) {
-          confirmDlBtn.click();
-          const b64 = await waitFor(async () => {
-            if (interceptedDownloadUrl) {
-              return await blobUrlToBase64(interceptedDownloadUrl);
-            }
-            return null;
-          }, 30, 'Không lấy được file tải về từ Canva.');
-          if (b64) return b64;
-        }
       }
     }
 
@@ -505,32 +490,30 @@
     showStatus('Đang chuẩn bị trang Canva…');
     await sleep(2500);
 
-    const beforeSrcs = new Set([...document.images].map(img => img.currentSrc || img.src));
-
-    // 1. Click vào tranh, nhấn DEL để xóa ảnh cũ -> trang trắng
+    // 1. Xóa ảnh cũ (DEL)
     await clearOldImage();
     check();
 
-    // 2. Kéo ảnh màu ở bước 1 vào
+    // 2. Kéo ảnh mới vào (duy nhất 1 ảnh)
     await uploadImage();
     check();
 
-    // 2b. Khớp ảnh vừa 4 góc trang canvas
-    await fitImageToPage();
+    // 3. Chuột phải -> Đổi cỡ khung vẽ cho vừa với vùng chọn
+    await resizeCanvasToFit();
     check();
 
-    // 3. Chọn tranh -> hiện nút Chỉnh sửa -> nhấn nút Chỉnh sửa -> hiện cửa sổ Sửa hình ảnh
+    // 4. Click chọn ảnh -> Bấm "Chỉnh sửa" -> Hiện cửa sổ Sửa hình ảnh
     await openEditPanel();
     check();
 
-    // 4. Trong Khớp định dạng, chọn Nghệ thuật đường nét
+    // 5 & 6. Nhấn "Nghệ thuật đường nét" -> Chờ chỉnh sửa xong hoàn toàn
     await applyLineArtStyle();
     check();
 
     sessionStorage.setItem(marker, 'done');
 
-    // 5. Trích xuất ảnh line art ([picture_name]_line_notpatch)
-    const result = await extractLineImage(beforeSrcs);
+    // 7. Chờ tranh đã chỉnh sửa xong MỚI tải xuống
+    const result = await extractLineImage();
 
     showStatus('Đang chuyển ảnh nét về Studio…');
     clearInterval(heartbeat);
