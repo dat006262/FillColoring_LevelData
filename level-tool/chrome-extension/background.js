@@ -76,7 +76,12 @@ async function imageData(url) {
   }
   const parsed = new URL(url);
   const allowed = ['gemini.google.com', 'aistudio.google.com', 'www.canva.com', 'canva.com'];
-  if (parsed.protocol !== 'https:' || (!allowed.includes(parsed.hostname) && !parsed.hostname.endsWith('.googleusercontent.com') && !parsed.hostname.endsWith('.canva.com'))) {
+  const isAllowedHost = allowed.includes(parsed.hostname) ||
+                        parsed.hostname.endsWith('.googleusercontent.com') ||
+                        parsed.hostname.endsWith('.canva.com') ||
+                        parsed.hostname.endsWith('.canva-static.com') ||
+                        parsed.hostname.endsWith('.canvamedia.com');
+  if (parsed.protocol !== 'https:' || !isAllowedHost) {
     throw new Error('Ảnh không thuộc Gemini/AI Studio/Canva. Hãy tải ảnh trong tab và nhập kết quả có sẵn.');
   }
   const response = await fetch(url, { credentials: 'include', signal: AbortSignal.timeout(60000) });
