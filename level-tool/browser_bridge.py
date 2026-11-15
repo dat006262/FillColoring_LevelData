@@ -1,3 +1,4 @@
+from pathlib import Path
 """One-use leases between the local workflow and the Chrome content-script worker.
 
 No Google credentials or internal Gemini HTTP endpoints are used here.
@@ -142,9 +143,25 @@ class BrowserBridge:
                        'page_url': None}
             self.requests[task_id] = request
         deadline = time.monotonic() + self.timeout
+        task_start = time.time()
+        downloads_dir = Path.home() / 'Downloads'
         try:
             while not request['event'].wait(.5):
                 progress(request['message'])
+                if stage == 'source' and 'canva.com' in url and downloads_dir.exists():
+                    try:
+                        for entry in downloads_dir.glob('*.png'):
+                            if entry.is_file() and entry.stat().st_mtime >= task_start - 2:
+                                s1 = entry.stat().st_size
+                                if s1 > 5000:
+                                    time.sleep(0.3)
+                                    if entry.stat().st_size == s1:
+                                        request['result'] = entry.read_bytes()
+                                        request['page_url'] = url
+                                        request['event'].set()
+                                        break
+                    except Exception:
+                        pass
                 if time.monotonic() >= deadline:
                     raise BrowserError('Hết thời gian chờ phản hồi AI (15 phút). Xem tab trình duyệt; công cụ không tự gửi lại prompt.')
                 # Before claim it is safe to stop if the only bridge page was closed.

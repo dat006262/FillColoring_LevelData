@@ -111,7 +111,7 @@ def validate_artwork(image, stage):
     gray = ImageOps.grayscale(rgb)
     hist = gray.histogram()
     total = rgb.width * rgb.height
-    dark = sum(hist[:96]) / total
+    dark = sum(hist[:140]) / total
     light = sum(hist[192:]) / total
     if max(ImageStat.Stat(rgb).stddev) < 5 or dark > .98 or light > .999:
         raise WorkflowError('Ảnh rỗng hoặc gần như toàn đen/trắng. Hãy lấy đúng ảnh kết quả, không dùng canvas/thumbnail trống.')
@@ -121,7 +121,7 @@ def validate_artwork(image, stage):
     if stage in ('origin', 'color') and colored < .01:
         raise WorkflowError('Ảnh màu chưa được tô màu; kết quả vẫn là ảnh nét. Hãy lấy ảnh đầu ra của AI.')
     if stage in ('source', 'patch', 'transparent'):
-        if dark < .001 or light < .2 or colored > .05:
+        if dark < .0005 or light < .2 or colored > .05:
             raise WorkflowError('Ảnh line phải có nét đen trên nền trắng hoặc trong suốt. Hãy kiểm tra đúng bước xử lý.')
     if stage == 'transparent':
         alpha = image.convert('RGBA').getchannel('A')
