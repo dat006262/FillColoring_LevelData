@@ -67,6 +67,13 @@ async function tick() {
 }
 
 async function imageData(url) {
+  if (url.startsWith('blob:')) {
+    const response = await fetch(url);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += 16384) binary += String.fromCharCode(...bytes.subarray(i, i + 16384));
+    return btoa(binary);
+  }
   const parsed = new URL(url);
   const allowed = ['gemini.google.com', 'aistudio.google.com', 'www.canva.com', 'canva.com'];
   if (parsed.protocol !== 'https:' || (!allowed.includes(parsed.hostname) && !parsed.hostname.endsWith('.googleusercontent.com') && !parsed.hostname.endsWith('.canva.com'))) {

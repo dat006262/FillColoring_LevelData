@@ -214,14 +214,19 @@
   }
 
   function isModelOutput(el) {
-    if (el.closest('ms-prompt-input, .prompt-box, .input-area, .user-turn, [data-role="user"], [data-turn-role="user"]')) return false;
-    // Media chunks also occur inside model responses. Require positive model ancestry.
-    return !!el.closest('ms-model-response, model-response, .model-turn, [data-role="model"], [data-role="assistant"], [data-turn-role="model"]');
+    if (el.closest('ms-prompt-input, .prompt-box, .input-area, ms-composer, form, .user-turn, [data-role="user"], [data-turn-role="user"]')) {
+      return false;
+    }
+    if (el.closest('nav, aside, header, .user-avatar, ms-user-avatar, [role="banner"]')) {
+      return false;
+    }
+    return true;
   }
 
   function getGeneratedImages(beforeRunImages) {
-    return [...document.querySelectorAll('img')].filter(img => {
-      if (!visible(img) || !img.complete || img.naturalWidth < 256 || img.naturalHeight < 256) return false;
+    const all = querySelectorAllDeep('img');
+    return all.filter(img => {
+      if (!visible(img) || !img.complete || img.naturalWidth < 200 || img.naturalHeight < 200) return false;
       const src = img.currentSrc || img.src;
       if (beforeRunImages.has(src)) return false;
       if (!isModelOutput(img)) return false;
@@ -313,19 +318,24 @@
     while (Date.now() < deadline) {
       check();
       const stopping = stopButton();
-      const spinner = document.querySelector('mat-progress-spinner, [role="progressbar"], .spinner, ms-progress-bar, .loading, .running');
-      const isGenerating = !!(stopping || (spinner && visible(spinner)));
+      const spinner = querySelectorAllDeep('mat-progress-spinner, ms-progress-bar, .spinner', document).find(el => {
+        if (!visible(el)) return false;
+        if (el.closest('nav, aside, header, .nav-pane, .side-bar')) return false;
+        return true;
+      });
+      const isGenerating = !!(stopping || spinner);
 
       const candidates = getGeneratedImages(beforeRunImages);
       const candidate = candidates.at(-1);
 
-      if (candidate && !isGenerating) {
+      if (candidate) {
         const src = candidate.currentSrc || candidate.src;
         if (stable !== src) {
           stable = src;
           stableAt = Date.now();
         }
-        if (Date.now() - stableAt > 3000) {
+        const waitTime = isGenerating ? 4000 : 1500;
+        if (Date.now() - stableAt >= waitTime) {
           result = candidate;
           break;
         }
@@ -353,6 +363,20 @@
       imageBase64 = canvas.toDataURL('image/png').split(',')[1];
     } catch (_) {
       imageBase64 = null;
+    }
+    if (!imageBase64) {
+      try {
+        const resp = await fetch(url, { credentials: 'include' });
+        if (resp.ok) {
+          const blob = await resp.blob();
+          const reader = new FileReader();
+          imageBase64 = await new Promise((resolve, reject) => {
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        }
+      } catch (_) {}
     }
 
     if (imageBase64) {
