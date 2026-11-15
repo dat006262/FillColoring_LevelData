@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "FillColoring Browser Bridge",
+  "version": "1.2.0",
+  "description": "Tạo tranh gốc, tạo nét qua Canva, vá nét và tô màu qua Gemini/AI Studio, kết nối với FillColoring Studio.",
+  "permissions": ["storage", "alarms"],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://gemini.google.com/*",
+    "https://aistudio.google.com/*",
+    "https://*.googleusercontent.com/*",
+    "https://www.canva.com/*",
+    "https://*.canva.com/*"
+  ],
+  "background": {"service_worker": "background.js"},
+  "content_scripts": [
+    {"matches": ["http://127.0.0.1:8765/*"], "js": ["studio.js"], "run_at": "document_idle"},
+    {"matches": ["https://gemini.google.com/*"], "js": ["gemini.js"], "run_at": "document_idle"},
+    {"matches": ["https://aistudio.google.com/*"], "js": ["aistudio.js"], "run_at": "document_idle"},
+    {"matches": ["https://www.canva.com/*"], "js": ["canva.js"], "run_at": "document_idle"}
+  ],
+  "action": {"default_title": "Mở FillColoring Studio"}
+}

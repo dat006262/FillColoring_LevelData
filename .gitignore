@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# Local runtime data & caches
+level-tool/data/projects/
+level-tool/data/*.log
+level-tool/data/*.pid
+level-tool/data/*.dpapi
+.codex-doc-qa/
+
+# Output generated files (keep folder tracked via .gitkeep)
+output/*
+!output/.gitkeep
+
+# System files
+Thumbs.db
+.DS_Store
