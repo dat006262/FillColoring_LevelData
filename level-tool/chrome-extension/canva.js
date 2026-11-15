@@ -2,7 +2,7 @@
  * Step 2:
  * 1. Xóa ảnh cũ: Click vào tranh, nhấn DEL để xóa -> thu được 1 trang trắng.
  * 2. Đưa ảnh màu gốc vào Canva (chỉ 1 ảnh, không lặp lại).
- * 3. Chuột phải vào ảnh -> chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn" (hoặc Đặt hình ảnh làm nền).
+ * 3. Chuột phải vào ảnh / bấm "..." -> chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn".
  * 4. Click chọn ảnh -> nhấn nút "Chỉnh sửa" trên thanh công cụ -> hiện cửa sổ "Sửa hình ảnh".
  * 5. Trong mục "Khớp định dạng", nhấn "Nghệ thuật đường nét" (Line art).
  * 6. Chờ tranh được chuyển đổi nét đen hoàn tất (xuất hiện nút Đặt lại kiểu, hết spinner).
@@ -129,7 +129,26 @@
     return target;
   }
 
-  function rightClickAt(x, y) {
+  function openContextMenu(x, y) {
+    // 1. Try finding the "..." (Tùy chọn khác / More) button on the floating selection action bar
+    const moreBtn = querySelectorAllDeep('button, [role="button"]').find(el => {
+      if (!visible(el)) return false;
+      const aria = (el.getAttribute('aria-label') || '').trim();
+      const title = (el.getAttribute('title') || '').trim();
+      const txt = (el.innerText || el.textContent || '').trim();
+      return /^(?:tùy chọn khác|thêm|xem thêm|more options|more)$/i.test(aria) ||
+             /^(?:tùy chọn khác|thêm|xem thêm|more options|more)$/i.test(title) ||
+             /^(?:\.\.\.|···|…)$/.test(txt);
+    });
+
+    if (moreBtn) {
+      const r = moreBtn.getBoundingClientRect();
+      clickAt(r.left + r.width / 2, r.top + r.height / 2);
+      moreBtn.click();
+      return;
+    }
+
+    // 2. Dispatch real right-click pointer & mouse sequence
     const target = document.elementFromPoint(x, y) || document.body;
     const opts = {
       bubbles: true,
@@ -137,11 +156,19 @@
       view: window,
       clientX: x,
       clientY: y,
+      screenX: x,
+      screenY: y,
       button: 2,
-      buttons: 2
+      buttons: 2,
+      pointerId: 1,
+      pointerType: 'mouse',
+      isPrimary: true
     };
-    try { target.dispatchEvent(new MouseEvent('contextmenu', opts)); } catch (_) {}
-    return target;
+    try { target.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (_) {}
+    try { target.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (_) {}
+    try { target.dispatchEvent(new PointerEvent('pointerup', { ...opts, button: 2, buttons: 0 })); } catch (_) {}
+    try { target.dispatchEvent(new MouseEvent('mouseup', { ...opts, button: 2, buttons: 0 })); } catch (_) {}
+    try { target.dispatchEvent(new MouseEvent('contextmenu', { ...opts, button: 2, buttons: 0 })); } catch (_) {}
   }
 
   function sendDeleteKeys() {
@@ -173,15 +200,12 @@
     showStatus('Bước 1: Đang click vào tranh cũ và nhấn DEL để xóa (thu trang trắng)…');
     const center = getPageCenter();
 
-    // Click vào tranh
     clickAt(center.x, center.y);
     await sleep(400);
 
-    // Nhấn DEL
     sendDeleteKeys();
     await sleep(300);
 
-    // Nếu thanh nổi có nút xóa, click luôn
     const delBtn = querySelectorAllDeep('button, [role="button"]').find(el => {
       if (!visible(el)) return false;
       const aria = (el.getAttribute('aria-label') || '').trim();
@@ -209,7 +233,6 @@
     const center = getPageCenter();
     const stage = document.elementFromPoint(center.x, center.y) || getCanvasStage();
 
-    // Chỉ dùng DragEvent (drop), KHÔNG dispatch thêm ClipboardEvent (paste) để tránh bị nhân đôi ảnh
     stage.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
     stage.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
     stage.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt, clientX: center.x, clientY: center.y }));
@@ -217,44 +240,67 @@
     await sleep(2500);
   }
 
-  // Bước 3: Chuột phải chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn" (hoặc Đặt hình ảnh làm nền)
-  async function resizeCanvasToFit() {
-    showStatus('Bước 3: Chuột phải -> Đổi cỡ khung vẽ cho vừa với vùng chọn…');
-    const center = getPageCenter();
-
-    // Click chọn ảnh
-    clickAt(center.x, center.y);
-    await sleep(500);
-
-    // Chuột phải mở menu ngữ cảnh
-    rightClickAt(center.x, center.y);
-    await sleep(600);
-
-    const menuItems = querySelectorAllDeep('button, [role="menuitem"], [role="button"], div[tabindex="0"], span');
-
-    // 1. Ưu tiên: "Đổi cỡ khung vẽ cho vừa với vùng chọn"
-    const resizeOption = menuItems.find(el => {
+  function findResizeOption() {
+    const all = querySelectorAllDeep('button, [role="menuitem"], [role="button"], div, span, p');
+    return all.find(el => {
       if (!visible(el)) return false;
       const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
       return /đổi cỡ khung vẽ cho vừa(?: với)? vùng(?: được)? chọn|resize canvas to fit selection/i.test(text);
     });
+  }
+
+  // Bước 3: Chuột phải chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn"
+  async function resizeCanvasToFit() {
+    showStatus('Bước 3: Chuột phải -> Đổi cỡ khung vẽ cho vừa với vùng chọn…');
+    const center = getPageCenter();
+
+    let resizeOption = null;
+
+    for (let attempt = 0; attempt < 6; attempt++) {
+      // 1. Click chọn ảnh
+      clickAt(center.x, center.y);
+      await sleep(400);
+
+      // 2. Mở context menu (qua nút "..." hoặc click chuột phải)
+      openContextMenu(center.x, center.y);
+      await sleep(700);
+
+      // 3. Tìm dòng "Đổi cỡ khung vẽ cho vừa với vùng chọn"
+      resizeOption = findResizeOption();
+      if (resizeOption) break;
+
+      // Nếu chưa ra, thử click hơi lệch tâm rồi chuột phải lại
+      const offsets = [30, -30, 50, -50];
+      const dx = offsets[attempt % offsets.length];
+      clickAt(center.x + dx, center.y + dx);
+      await sleep(400);
+    }
 
     if (resizeOption) {
+      showStatus('Đang nhấn "Đổi cỡ khung vẽ cho vừa với vùng chọn"…');
+      const clickable = resizeOption.closest('button, [role="menuitem"], [role="button"], div[tabindex="0"]') || resizeOption;
+      clickable.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      await sleep(200);
+
+      const r = clickable.getBoundingClientRect();
+      clickAt(r.left + r.width / 2, r.top + r.height / 2);
+      clickable.click();
       resizeOption.click();
       await sleep(1000);
 
-      // Nếu có hộp thoại xác nhận đổi cỡ, bấm xác nhận
+      // Nếu có hộp thoại xác nhận đổi cỡ (vd: "Đổi cỡ thiết kế này" / "Đổi cỡ"), bấm xác nhận
       const confirmResize = querySelectorAllDeep('button, [role="button"]').find(el => {
         if (!visible(el)) return false;
-        const t = (el.innerText || el.textContent || '').trim();
-        return /^(?:đổi cỡ|resize)$/i.test(t);
+        const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+        return /^(?:đổi cỡ thiết kế này|đổi cỡ|resize this design|resize|tiếp tục|continue)$/i.test(t);
       });
       if (confirmResize) {
         confirmResize.click();
         await sleep(800);
       }
     } else {
-      // 2. Dự phòng: "Đặt hình ảnh làm nền"
+      // Dự phòng: "Đặt hình ảnh làm nền"
+      const menuItems = querySelectorAllDeep('button, [role="menuitem"], [role="button"], div[tabindex="0"], span');
       const setBgOption = menuItems.find(el => {
         if (!visible(el)) return false;
         const text = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
@@ -269,6 +315,7 @@
     }
 
     // Click lại vào tâm ảnh để đưa ảnh vào trạng thái đang chọn (Selected)
+    await sleep(400);
     clickAt(center.x, center.y);
     await sleep(500);
   }
@@ -371,21 +418,17 @@
       return opt;
     }, 25, 'Không tìm thấy tùy chọn "Nghệ thuật đường nét" trong Khớp định dạng.');
 
-    // Tìm phần tử có thể click (thẻ bao quanh nút)
     const clickable = lineArtOption.closest('button, [role="button"], [role="radio"], [role="option"], [tabindex="0"]') || lineArtOption;
     clickable.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await sleep(400);
 
-    // Click thực tế tại tâm của ô Nghệ thuật đường nét
     const r = clickable.getBoundingClientRect();
     clickAt(r.left + r.width / 2, r.top + r.height / 2);
     clickable.click();
 
     showStatus('Bước 6: Canva đang chuyển đổi sang nét đen (vui lòng chờ xong mới tải)…');
-    // Chờ tối thiểu 6s để Canva AI filter khởi động
     await sleep(6000);
 
-    // Chờ cho đến khi: xuất hiện nút "Đặt lại kiểu" (Reset style) HOẶC hết spinner tải
     await waitFor(() => {
       const all = querySelectorAllDeep('button, [role="button"], span');
       const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test((el.innerText || el.textContent || '').trim()));
@@ -395,7 +438,6 @@
       return spinners.length === 0;
     }, 45, 'Canva xử lý hiệu ứng nét đen quá lâu.');
 
-    // Chờ thêm 3s để khung vẽ hiển thị ảnh nét ổn định
     showStatus('Canva đã hoàn tất nét vẽ. Đang chuẩn bị tải ảnh…');
     await sleep(3000);
   }
@@ -404,7 +446,7 @@
   async function extractLineImage() {
     showStatus('Bước 7: Đang tải ảnh nét về Studio…');
 
-    // 1. Kích hoạt xuất chính thức từ Canva: Chia sẻ -> Tải xuống -> Tải xuống
+    // 1. Xuất chính thức từ Canva: Chia sẻ -> Tải xuống -> Tải xuống
     const allButtons = querySelectorAllDeep('button, [role="button"]');
     const shareBtn = allButtons.find(el => visible(el) && /^(?:chia sẻ|share)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
     if (shareBtn) {
@@ -422,7 +464,6 @@
         if (confirmDlBtn) {
           confirmDlBtn.click();
 
-          // Chờ bắt link tải file từ hook
           const b64 = await waitFor(async () => {
             if (interceptedDownloadUrl) {
               return await blobUrlToBase64(interceptedDownloadUrl);
@@ -434,7 +475,7 @@
       }
     }
 
-    // 2. Dự phòng: Kiểm tra ảnh trong canvas stage
+    // 2. Dự phòng: Canvas stage
     const stage = getCanvasStage();
     const imgs = [...stage.querySelectorAll('img')].filter(img =>
       visible(img) && img.naturalWidth >= 300 && img.naturalHeight >= 300 &&
@@ -498,7 +539,7 @@
     await uploadImage();
     check();
 
-    // 3. Chuột phải -> Đổi cỡ khung vẽ cho vừa với vùng chọn
+    // 3. Chuột phải / Menu "..." -> Đổi cỡ khung vẽ cho vừa với vùng chọn
     await resizeCanvasToFit();
     check();
 
