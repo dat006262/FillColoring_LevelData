@@ -67,6 +67,7 @@ async function tick() {
 }
 
 async function imageData(url) {
+  if (!url || typeof url !== 'string') return null;
   if (url.startsWith('blob:')) {
     const response = await fetch(url);
     const bytes = new Uint8Array(await response.arrayBuffer());
@@ -131,9 +132,17 @@ async function dispatch(msg, sender) {
   }
   if (msg.type === 'gemini-result' || msg.type === 'aistudio-result' || msg.type === 'canva-result') {
     try {
-      const raw = msg.image || await imageData(msg.url);
-      if (typeof raw !== 'string' || raw.length > 26 * 1024 * 1024) throw new Error('Ảnh kết quả quá lớn.');
-      const result = await report(active, { image: raw, page_url: sender.url });
+      let raw = msg.image;
+      if (!raw && msg.url) {
+        raw = await imageData(msg.url);
+      }
+      if (raw) {
+        if (typeof raw !== 'string' || raw.length > 26 * 1024 * 1024) throw new Error('Ảnh kết quả quá lớn.');
+        const result = await report(active, { image: raw, page_url: sender.url });
+        await chrome.storage.session.remove('active');
+        return result;
+      }
+      const result = await report(active, { message: msg.message || 'Đã xuất file tải xuống thành công', page_url: sender.url });
       await chrome.storage.session.remove('active');
       return result;
     } catch (error) {

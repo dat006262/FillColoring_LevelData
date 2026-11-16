@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "FillColoring Browser Bridge",
-  "version": "1.2.6",
+  "version": "1.2.7",
   "description": "Tạo tranh gốc, tạo nét qua Canva, vá nét và tô màu qua Gemini/AI Studio, kết nối với FillColoring Studio.",
   "permissions": ["storage", "alarms"],
   "host_permissions": [
