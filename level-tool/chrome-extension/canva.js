@@ -543,14 +543,8 @@
     const r = el.getBoundingClientRect();
     const cx = r.left + r.width / 2;
     const cy = r.top + r.height / 2;
+    // Gửi đúng 1 lượt click chuẩn, tránh kích hoạt tải 2 lần
     clickAt(cx, cy);
-    const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true };
-    try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (_) {}
-    try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (_) {}
-    try { if (el.focus) el.focus(); } catch (_) {}
-    try { el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 })); } catch (_) {}
-    try { el.dispatchEvent(new MouseEvent('mouseup', { ...opts, buttons: 0 })); } catch (_) {}
-    try { el.click(); } catch (_) {}
     return true;
   }
 
@@ -625,36 +619,46 @@
       throw new Error('Không tìm thấy nút "Tải xuống" màu tím trên Canva. Hãy kiểm tra giao diện tải xuống.');
     }
 
-    // 2. Nhấn nút "Tải xuống" màu tím (thử lại cho tới khi Canva bắt đầu tạo file)
+    // 2. Nhấn nút "Tải xuống" màu tím (chỉ click 1 lần duy nhất để không bị tải trùng)
     showStatus('Đang nhấn nút "Tải xuống" màu tím…');
+    clickButtonReliable(confirmBtn);
+
     let downloadTriggered = false;
+    const waitStartTime = Date.now();
 
-    for (let attempt = 0; attempt < 5; attempt++) {
-      clickButtonReliable(confirmBtn);
-      await sleep(1200);
-
-      // Kiểm tra xem Canva đã hiện thanh tiến trình "Đang chuẩn bị thiết kế..." chưa
-      const isPreparing = querySelectorAllDeep('[role="progressbar"], div, span, p').some(el => {
-        if (!visible(el) || el.closest('#fillcoloring-canva-status')) return false;
-        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
-        return txt.includes('đang chuẩn bị thiết kế') || txt.includes('đang tải xuống') || txt.includes('preparing your design') || txt.includes('downloading');
-      });
-
-      if (isPreparing || interceptedDownloadUrl) {
+    // Chờ Canva bắt đầu tiến trình xuất file (kiểm tra mỗi 500ms, chờ tối đa 8 giây)
+    while (Date.now() - waitStartTime < 8000) {
+      if (interceptedDownloadUrl) {
         downloadTriggered = true;
         break;
       }
+      const isPreparing = querySelectorAllDeep('[role="progressbar"], div, span, p').some(el => {
+        if (!visible(el) || el.closest('#fillcoloring-canva-status')) return false;
+        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return txt.includes('đang chuẩn bị thiết kế') || txt.includes('đang tải xuống') ||
+               txt.includes('preparing your design') || txt.includes('downloading');
+      });
+      if (isPreparing) {
+        downloadTriggered = true;
+        break;
+      }
+      await sleep(500);
+    }
 
-      // Tìm lại nút nếu DOM được re-render
-      const nextBtn = findPurpleDownloadButton();
-      if (nextBtn) confirmBtn = nextBtn;
+    // Dự phòng: chỉ khi sau 8s mà Canva hoàn toàn không có phản hồi mới bấm lại 1 lần
+    if (!downloadTriggered && !interceptedDownloadUrl) {
+      const retryBtn = findPurpleDownloadButton();
+      if (retryBtn) {
+        clickButtonReliable(retryBtn);
+        await sleep(1500);
+      }
     }
 
     showStatus('Đã kích hoạt tải xuống! Đang chờ file PNG lưu về máy…');
 
-    // Chờ 12s để Chrome hoàn tất lưu file vào thư mục Downloads
+    // Chờ tối đa 15s để Chrome hoàn tất lưu file vào thư mục Downloads
     const dlStart = Date.now();
-    while (Date.now() - dlStart < 12000) {
+    while (Date.now() - dlStart < 15000) {
       if (interceptedDownloadUrl) {
         const b64 = await blobUrlToBase64(interceptedDownloadUrl);
         if (b64) return b64;

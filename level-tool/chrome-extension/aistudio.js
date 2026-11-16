@@ -25,9 +25,13 @@
     return results;
   }
 
-  const buttons = () => [
-    ...document.querySelectorAll('button,[role="button"],[role="menuitem"],.mat-mdc-menu-item,mat-menu-item')
-  ].filter(visible);
+  const buttons = () => {
+    const list = [
+      ...document.querySelectorAll('button,[role="button"],[role="menuitem"],.mat-mdc-menu-item,mat-menu-item'),
+      ...querySelectorAllDeep('button,[role="button"]', document)
+    ];
+    return [...new Set(list)].filter(visible);
+  };
 
   const findButton = regex => buttons().find(el => regex.test(label(el)));
 
@@ -46,8 +50,37 @@
   const stopButton = () => {
     return buttons().find(el => {
       const l = label(el).toLowerCase();
-      return /^(?:stop|dừng)(?:\s|$)|cancel/i.test(l) || (el.textContent || '').trim().toLowerCase() === 'stop';
+      if (/^(?:stop|dừng)(?:\s|$)|stop prompt|stop response|stop generating|cancel/i.test(l) || (el.textContent || '').trim().toLowerCase() === 'stop') {
+        return true;
+      }
+      const icons = querySelectorAllDeep('mat-icon, svg', el);
+      for (const icon of icons) {
+        const txt = (icon.textContent || '').trim().toLowerCase();
+        if (txt === 'stop' || txt === 'cancel' || txt === 'pause') return true;
+        const iconName = (icon.getAttribute('data-mat-icon-name') || icon.getAttribute('aria-label') || '').toLowerCase();
+        if (iconName.includes('stop') || iconName.includes('cancel')) return true;
+      }
+      return false;
     });
+  };
+
+  const isGeneratingStatus = () => {
+    if (stopButton()) return true;
+    const spinners = querySelectorAllDeep('mat-progress-spinner, mat-spinner, ms-progress-bar, mat-progress-bar, .spinner, [role="progressbar"], ms-loading-chunk', document);
+    const active = spinners.find(el => {
+      if (!visible(el)) return false;
+      if (el.closest('nav, aside, header, .nav-pane, .side-bar')) return false;
+      return true;
+    });
+    if (active) return true;
+    const runBtn = runButton();
+    if (runBtn) {
+      const runTxt = label(runBtn).toLowerCase();
+      if (/running|đang chạy|generating|đang tạo/i.test(runTxt) || runBtn.querySelector('mat-spinner, mat-progress-spinner')) {
+        return true;
+      }
+    }
+    return false;
   };
 
   async function message(type, extra = {}) {
@@ -217,19 +250,27 @@
     if (el.closest('ms-prompt-input, .prompt-box, .input-area, ms-composer, form, .user-turn, [data-role="user"], [data-turn-role="user"]')) {
       return false;
     }
-    if (el.closest('nav, aside, header, .user-avatar, ms-user-avatar, [role="banner"]')) {
+    if (el.closest('nav, aside, header, .user-avatar, ms-user-avatar, [role="banner"], .history, ms-history-panel')) {
       return false;
     }
     return true;
   }
 
-  function getGeneratedImages(beforeRunImages) {
+  function getGeneratedImages(beforeElements, beforeSrcs, beforeTurns) {
     const all = querySelectorAllDeep('img');
     return all.filter(img => {
-      if (!visible(img) || !img.complete || img.naturalWidth < 200 || img.naturalHeight < 200) return false;
+      if (!visible(img) || !isModelOutput(img)) return false;
+      if (!img.complete || img.naturalWidth < 200 || img.naturalHeight < 200) return false;
       const src = img.currentSrc || img.src;
-      if (beforeRunImages.has(src)) return false;
-      if (!isModelOutput(img)) return false;
+      if (!src) return false;
+      if (beforeSrcs && beforeSrcs.has(src)) return false;
+      if (beforeElements && beforeElements.has(img)) {
+        if (beforeSrcs && beforeSrcs.has(src)) return false;
+      }
+      if (beforeTurns && beforeTurns.size > 0) {
+        const turn = img.closest('ms-chat-turn, ms-model-turn, .model-turn, [data-role="model"], [data-turn-role="model"], ms-chunk-renderer');
+        if (turn && beforeTurns.has(turn)) return false;
+      }
       return true;
     });
   }
@@ -289,14 +330,14 @@
       return b && !b.disabled && b.getAttribute('aria-disabled') !== 'true' ? b : null;
     }, 40, 'Nút Run chưa sẵn sàng; ảnh có thể chưa tải xong.');
 
-    // Crucial: record all images on the page (including the uploaded line art thumbnail)
-    // BEFORE clicking Run, so the uploaded line art is NEVER mistaken for the AI output!
-    const beforeRunImages = new Set([...document.images].map(img => img.currentSrc || img.src));
+    // Ghi lại toàn bộ ảnh và lượt chat ĐANG CÓ TRƯỚC KHI BẤM RUN
+    // Tuyệt đối không lấy nhầm ảnh của các lượt tạo trước đó
+    const beforeRunElements = new Set(querySelectorAllDeep('img'));
+    const beforeRunSrcs = new Set(querySelectorAllDeep('img').map(img => img.currentSrc || img.src).filter(Boolean));
+    const beforeModelTurns = new Set(querySelectorAllDeep('ms-chat-turn, ms-model-turn, .model-turn, [data-role="model"], [data-turn-role="model"], ms-chunk-renderer'));
 
     check();
     if (task.stage === 'origin') {
-      // Inspect only the active composer. Saved chats contain media in old turns,
-      // which are not attachments to the prompt we are about to submit.
       const composer = box.closest('ms-prompt-input, .prompt-box, .input-area') || box.parentElement;
       if (!composer) throw new Error('Không xác định được vùng nhập prompt AI Studio.');
       const media = querySelectorAllDeep('ms-media-chunk, .media-chunk, .file-chip, ms-image-chunk', composer).filter(visible);
@@ -308,40 +349,60 @@
     sessionStorage.setItem(marker, 'sent');
     runBtn.click();
 
+    showStatus('Đã nhấn Run. Đang chờ AI Studio khởi động xử lý…');
+
+    // Chờ AI Studio bắt đầu tạo ảnh (chuyển sang trạng thái generating)
+    let generationStarted = false;
+    const startDeadline = Date.now() + 15000;
+    while (Date.now() < startDeadline) {
+      check();
+      if (isGeneratingStatus()) {
+        generationStarted = true;
+        break;
+      }
+      await sleep(400);
+    }
+
     showStatus('AI Studio đang xử lý và tạo ảnh màu…');
 
-    // Wait for generation: run button becomes disabled/stop button appears, then completes
-    await sleep(3000);
+    // Chờ tạo ảnh: TUYỆT ĐỐI không lấy ảnh khi isGeneratingStatus() vẫn đang chạy!
     let stable = '', stableAt = 0, result = null;
     const deadline = Date.now() + 12 * 60 * 1000;
+    const genStartTime = Date.now();
 
     while (Date.now() < deadline) {
       check();
-      const stopping = stopButton();
-      const spinner = querySelectorAllDeep('mat-progress-spinner, ms-progress-bar, .spinner', document).find(el => {
-        if (!visible(el)) return false;
-        if (el.closest('nav, aside, header, .nav-pane, .side-bar')) return false;
-        return true;
-      });
-      const isGenerating = !!(stopping || spinner);
+      const generating = isGeneratingStatus();
+      const elapsedSec = Math.floor((Date.now() - genStartTime) / 1000);
 
-      const candidates = getGeneratedImages(beforeRunImages);
-      const candidate = candidates.at(-1);
-
-      if (candidate) {
-        const src = candidate.currentSrc || candidate.src;
-        if (stable !== src) {
-          stable = src;
-          stableAt = Date.now();
-        }
-        const waitTime = isGenerating ? 4000 : 1500;
-        if (Date.now() - stableAt >= waitTime) {
-          result = candidate;
-          break;
-        }
-      } else {
+      if (generating) {
+        generationStarted = true;
+        showStatus(`AI Studio đang tạo ảnh… (${elapsedSec}s)`);
         stable = '';
         stableAt = 0;
+      } else {
+        // AI Studio đã dừng tạo ảnh (không còn nút Stop, không còn spinner)
+        if (generationStarted || elapsedSec >= 6) {
+          showStatus(`AI Studio đã xử lý xong (${elapsedSec}s). Đang kiểm tra ảnh mới…`);
+          const candidates = getGeneratedImages(beforeRunElements, beforeRunSrcs, beforeModelTurns);
+          const candidate = candidates.at(-1);
+
+          if (candidate && candidate.complete && candidate.naturalWidth >= 200 && candidate.naturalHeight >= 200) {
+            const src = candidate.currentSrc || candidate.src;
+            if (stable !== src) {
+              stable = src;
+              stableAt = Date.now();
+            }
+            // Chỉ khi ảnh mới giữ ổn định 2s SAU KHI tạo xong mới lấy
+            if (Date.now() - stableAt >= 2000) {
+              result = candidate;
+              break;
+            }
+          } else {
+            stable = '';
+            stableAt = 0;
+          }
+        }
       }
       await sleep(1000);
     }
