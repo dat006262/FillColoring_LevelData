@@ -537,78 +537,121 @@
     }
   }
 
+  function clickButtonReliable(el) {
+    if (!el) return false;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    clickAt(cx, cy);
+    const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, buttons: 1, pointerId: 1, pointerType: 'mouse', isPrimary: true };
+    try { el.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch (_) {}
+    try { el.dispatchEvent(new MouseEvent('mousedown', opts)); } catch (_) {}
+    try { if (el.focus) el.focus(); } catch (_) {}
+    try { el.dispatchEvent(new PointerEvent('pointerup', { ...opts, buttons: 0 })); } catch (_) {}
+    try { el.dispatchEvent(new MouseEvent('mouseup', { ...opts, buttons: 0 })); } catch (_) {}
+    try { el.click(); } catch (_) {}
+    return true;
+  }
+
+  function findPurpleDownloadButton() {
+    const all = querySelectorAllDeep('button, [role="button"], a[role="button"]').filter(el => {
+      if (!visible(el)) return false;
+      const r = el.getBoundingClientRect();
+      // Must be a visible button in the lower-right download region
+      if (r.width < 100 || r.height < 28) return false;
+      // Cannot be near the top header (exclude back button "< Tải xuống")
+      if (r.top < 200) return false;
+      const txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+      return /tải xuống|download/i.test(txt);
+    });
+    if (!all.length) {
+      // Fallback: any visible button with text "tải xuống" that has substantial size
+      const fallback = querySelectorAllDeep('button, [role="button"], a[role="button"]').filter(el => {
+        if (!visible(el)) return false;
+        const r = el.getBoundingClientRect();
+        if (r.width < 80 || r.height < 25 || r.top < 180) return false;
+        const txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+        return /tải xuống|download/i.test(txt);
+      });
+      if (!fallback.length) return null;
+      fallback.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+      return fallback[0];
+    }
+    all.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+    return all[0];
+  }
+
   // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong hoàn toàn
   async function extractLineImage() {
-    showStatus('Bước 7: Đang tải ảnh nét đã hoàn thiện về Studio…');
+    showStatus('Bước 7: Đang chuẩn bị tải ảnh nét về Studio…');
 
-    // 1. Xuất chính thức từ Canva: Chia sẻ -> Tải xuống -> Tải xuống
-    const allButtons = querySelectorAllDeep('button, [role="button"]');
-    const shareBtn = allButtons.find(el => visible(el) && /^(?:chia sẻ|share)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-    if (shareBtn) {
-      shareBtn.click();
-      await sleep(1000);
+    // 1. Kiểm tra xem bảng "Tải xuống" đã mở sẵn chưa (như khi người dùng đã mở)
+    let confirmBtn = findPurpleDownloadButton();
 
-      const dlMenuItem = querySelectorAllDeep('button, [role="menuitem"], [role="button"]').find(el =>
-        visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-      if (dlMenuItem) {
-        dlMenuItem.click();
-        await sleep(1500);
+    if (!confirmBtn) {
+      // Mở menu "Chia sẻ"
+      const allButtons = querySelectorAllDeep('button, [role="button"]');
+      const shareBtn = allButtons.find(el => visible(el) && /^(?:chia sẻ|share)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
+      if (shareBtn) {
+        showStatus('Đang mở menu "Chia sẻ"…');
+        clickButtonReliable(shareBtn);
+        await sleep(1200);
 
-        const confirmDlBtn = querySelectorAllDeep('button, [role="button"]').find(el =>
-          visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-        if (confirmDlBtn) {
-          confirmDlBtn.click();
-          showStatus('Đã nhấn Tải xuống! Đang chờ Canva xuất file PNG…');
-
-          // Chờ xem có bắt được URL blob/data trực tiếp không (trong vòng 4s)
-          for (let i = 0; i < 8; i++) {
-            if (interceptedDownloadUrl) {
-              const b64 = await blobUrlToBase64(interceptedDownloadUrl);
-              if (b64) return b64;
-            }
-            await sleep(500);
-          }
-
-          // Chờ thêm 7s để Chrome hoàn tất tải file vào thư mục Downloads
-          showStatus('Canva đang tải file về Downloads… Studio sẽ tự động nhận ảnh nét.');
-          await sleep(7000);
-          return 'downloaded-via-browser';
+        // Nhấn mục "Tải xuống" trong menu
+        const dlMenuItem = querySelectorAllDeep('button, [role="menuitem"], [role="button"]').find(el => {
+          if (!visible(el)) return false;
+          const txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
+          return /^(?:tải xuống|download)$/i.test(txt);
+        });
+        if (dlMenuItem) {
+          showStatus('Đang mở bảng tùy chọn "Tải xuống"…');
+          clickButtonReliable(dlMenuItem);
+          await sleep(1500);
         }
       }
+      confirmBtn = findPurpleDownloadButton();
     }
 
-    // 2. Dự phòng: Canvas stage
-    const stage = getCanvasStage();
-    const imgs = [...stage.querySelectorAll('img')].filter(img =>
-      visible(img) && img.naturalWidth >= 300 && img.naturalHeight >= 300 &&
-      !img.closest('nav, aside, [role="region"], [data-testid*="sidebar"], [data-testid*="panel"]')
-    );
-    imgs.sort((a, b) => (b.naturalWidth * b.naturalHeight) - (a.naturalWidth * a.naturalHeight));
+    if (!confirmBtn) {
+      throw new Error('Không tìm thấy nút "Tải xuống" màu tím trên Canva. Hãy kiểm tra giao diện tải xuống.');
+    }
 
-    for (const img of imgs) {
-      const src = img.currentSrc || img.src;
-      try {
-        const c = document.createElement('canvas');
-        c.width = img.naturalWidth || 1024;
-        c.height = img.naturalHeight || 1024;
-        const ctx = c.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const dataUrl = c.toDataURL('image/png');
-        if (dataUrl && dataUrl.length > 2000) return dataUrl.split(',')[1];
-      } catch (_) {}
+    // 2. Nhấn nút "Tải xuống" màu tím (thử lại cho tới khi Canva bắt đầu tạo file)
+    showStatus('Đang nhấn nút "Tải xuống" màu tím…');
+    let downloadTriggered = false;
 
-      if (src && (src.startsWith('blob:') || src.startsWith('https://'))) {
-        try {
-          const res = await fetch(src, { credentials: 'include' });
-          if (res.ok) {
-            const buf = await res.arrayBuffer();
-            const bytes = new Uint8Array(buf);
-            let bin = '';
-            for (let i = 0; i < bytes.length; i += 16384) bin += String.fromCharCode(...bytes.subarray(i, i + 16384));
-            return btoa(bin);
-          }
-        } catch (_) {}
+    for (let attempt = 0; attempt < 5; attempt++) {
+      clickButtonReliable(confirmBtn);
+      await sleep(1200);
+
+      // Kiểm tra xem Canva đã hiện thanh tiến trình "Đang chuẩn bị thiết kế..." chưa
+      const isPreparing = querySelectorAllDeep('[role="progressbar"], div, span, p').some(el => {
+        if (!visible(el) || el.closest('#fillcoloring-canva-status')) return false;
+        const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+        return txt.includes('đang chuẩn bị thiết kế') || txt.includes('đang tải xuống') || txt.includes('preparing your design') || txt.includes('downloading');
+      });
+
+      if (isPreparing || interceptedDownloadUrl) {
+        downloadTriggered = true;
+        break;
       }
+
+      // Tìm lại nút nếu DOM được re-render
+      const nextBtn = findPurpleDownloadButton();
+      if (nextBtn) confirmBtn = nextBtn;
+    }
+
+    showStatus('Đã kích hoạt tải xuống! Đang chờ file PNG lưu về máy…');
+
+    // Chờ 12s để Chrome hoàn tất lưu file vào thư mục Downloads
+    const dlStart = Date.now();
+    while (Date.now() - dlStart < 12000) {
+      if (interceptedDownloadUrl) {
+        const b64 = await blobUrlToBase64(interceptedDownloadUrl);
+        if (b64) return b64;
+      }
+      await sleep(1000);
     }
 
     return 'downloaded-via-browser';
@@ -664,12 +707,14 @@
 
     if (result && result.length > 500 && !result.startsWith('http') && result !== 'downloaded-via-browser') {
       await message('canva-result', { image: result });
+      showStatus('Đã chuyển ảnh nét về Studio thành công!');
     } else if (result && (result.startsWith('http') || result.startsWith('blob:'))) {
       await message('canva-result', { url: result });
+      showStatus('Đã chuyển ảnh nét về Studio thành công!');
     } else {
-      await message('canva-result', { message: 'Đã xuất file tải xuống thành công từ Canva' });
+      await message('canva-result', { message: 'Đã nhấn nút Tải xuống màu tím trên Canva. Studio đang tự động nhận ảnh nét từ Downloads.' });
+      showStatus('Đã nhấn Tải xuống! Studio đang tự động nhận ảnh nét từ thư mục Downloads…');
     }
-    showStatus('Đã đưa ảnh line vào Studio thành công!');
   }
 
   async function start() {
