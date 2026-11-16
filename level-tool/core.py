@@ -373,6 +373,17 @@ class Store:
     def image(self, project, record):
         return read_image((self.directory(project['id']) / record['file']).read_bytes())
 
+
+    def cancel(self, pid):
+        with self.lock:
+            cancelled = False
+            if hasattr(self, 'browser') and self.browser:
+                cancelled = self.browser.cancel(pid)
+            if pid in self.jobs and self.jobs[pid]['status'] == 'running':
+                self.jobs[pid].update(status='error', message='Đã dừng tạo tranh theo yêu cầu của bạn.', finished_at=now())
+                cancelled = True
+            return cancelled
+
     def ensure_idle(self, pid):
         if self.jobs.get(pid, {}).get('status') == 'running':
             raise WorkflowError('Tranh này đang xử lý. Hãy chờ bước hiện tại hoàn tất.')
@@ -497,10 +508,19 @@ class Store:
             if action == 'finish':
                 steps = ['transparent', 'color-aistudio']
             elif action == 'all':
-                steps = ['origin', 'canva-line', 'patch', 'color-aistudio', 'transparent']
+                project_init = self.load(pid)
+                if project_init.get('selected', {}).get('origin'):
+                    # Đã có tranh gốc: tiếp tục chạy tự động từ Bước 2 (Canva) đến Bước 5 và xuất 5 ảnh
+                    steps = ['canva-line', 'patch', 'color-aistudio', 'transparent']
+                else:
+                    # Chưa có tranh gốc: chạy đủ 5 bước từ Bước 1 (AI Studio) đến Bước 5 và xuất 5 ảnh
+                    steps = ['origin', 'canva-line', 'patch', 'color-aistudio', 'transparent']
             else:
                 steps = [action]
             for act in steps:
+                with self.lock:
+                    if self.jobs[pid].get('status') in ('error', 'cancelled') or self.jobs[pid].get('cancelled'):
+                        return
                 if act == 'origin':
                     stage = 'origin'
                 elif act == 'canva-line':

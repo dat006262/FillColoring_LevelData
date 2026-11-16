@@ -84,7 +84,7 @@ function render() {
 
   document.querySelectorAll('[data-run]').forEach(b=>{
     const act = b.dataset.run;
-    if (act === 'origin') b.disabled = locked || !aiReady;
+    if (act === 'origin' || act === 'all') b.disabled = locked || !aiReady;
     else if (act === 'canva-line') b.disabled = locked || !origin || !aiReady;
     else if (act === 'patch') b.disabled = locked || !source || !aiReady;
     else if (act === 'transparent') b.disabled = locked || !approved;
@@ -100,6 +100,15 @@ function render() {
   const job = state.jobs[p.id];
   $('job-status').hidden = !job;
   $('cancel-browser').hidden = !browserMode || job?.status !== 'running';
+  const isJobRunning = job?.status === 'running';
+  ['stop-job-header-btn', 'stop-job-bar-btn'].forEach(id => {
+    const el = $(id);
+    if (el) {
+      el.disabled = !isJobRunning;
+      el.style.cursor = isJobRunning ? 'pointer' : 'not-allowed';
+      el.style.opacity = isJobRunning ? '1' : '0.42';
+    }
+  });
   if(job){$('job-status').textContent=job.message;$('job-status').className=job.status;}
   $('next-title').textContent = !origin && !source ? 'Bắt đầu bằng tạo tranh gốc hoặc tạo line' : !source ? 'Chuyển tranh sang nét vẽ trên Canva' : !patch ? 'Vá kín nét hở bằng Gemini' : !approved ? 'Kiểm tra nét rồi duyệt line' : !color ? 'Line đã duyệt — sẵn sàng tô màu' : !p.approved.color ? 'Kiểm tra ảnh màu trước khi xuất' : !line ? 'Xóa nền line để hoàn tất' : 'Bộ ảnh đã hoàn tất và sẵn sàng xuất';
   $('next-description').textContent = !approved ? 'Bước tô màu và xóa nền dùng đúng phiên bản line bạn chọn.' : 'Chạy 4 + 5 hoặc chạy riêng từng bước. Các phiên bản trước luôn được giữ lại.';
@@ -286,7 +295,10 @@ $('delete-button').onclick=async()=>{const p=current();if(!p)return;if(!confirm(
 $('cleanup-raw-btn').onclick=async()=>{try{const res=await api('cleanup',{mode:'raw'});const mb=(res.freed_bytes/(1024*1024)).toFixed(1);toast(`Đã dọn dẹp ${res.cleaned_items} file thô (giải phóng ~${mb} MB).`);await refresh(true);}catch(e){toast(e.message);}};
 $('cleanup-all-btn').onclick=async()=>{if(!confirm('CẢNH BÁO: Bạn có chắc chắn muốn xóa TẤT CẢ tranh trong thư viện không?'))return;try{const res=await api('cleanup',{mode:'all'});selected=null;localStorage.removeItem('selected-project');$('settings-dialog').close();toast(`Đã dọn dẹp sạch toàn bộ thư viện (${res.cleaned_items} tranh).`);await refresh(true);}catch(e){toast(e.message);}};
 $('processing-mode').onchange=modeFields;
-$('cancel-browser').onclick=()=>act('cancel-browser');
+['stop-job-header-btn','stop-job-bar-btn','cancel-browser'].forEach(id=>{
+  const el = $(id);
+  if (el) el.onclick = () => act('cancel-browser');
+});
 $('export-button').onclick=()=>act('export');
 $('version').onchange=()=>act('select',{stage:tab,version:$('version').value});
 $('opacity').oninput=paintOverlay;

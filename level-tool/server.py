@@ -108,8 +108,8 @@ def make_server(store, port=0):
                 elif path == '/api/browser/report':
                     result = store.browser.report(data.get('task_id'), data.get('lease'), data.get('agent'),
                         message=data.get('message'), image=data.get('image'), error=data.get('error'), page_url=data.get('page_url'))
-                elif path == '/api/cancel-browser':
-                    result = {'cancelled': store.browser.cancel(pid)}
+                elif path == '/api/cancel-browser' or path == '/api/cancel':
+                    result = {'cancelled': store.cancel(pid)}
                 elif path == '/api/settings':
                     result = store.save_settings(data)
                 elif path == '/api/create':
