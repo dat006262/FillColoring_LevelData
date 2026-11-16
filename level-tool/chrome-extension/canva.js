@@ -129,7 +129,7 @@
     return target;
   }
 
-  function openContextMenu(x, y) {
+  function openContextMenu(x, y, preferMoreButton = true) {
     const moreBtn = querySelectorAllDeep('button, [role="button"]').find(el => {
       if (!visible(el)) return false;
       const aria = (el.getAttribute('aria-label') || '').trim();
@@ -140,7 +140,7 @@
              /^(?:\.\.\.|···|…)$/.test(txt);
     });
 
-    if (moreBtn) {
+    if (preferMoreButton && moreBtn) {
       const r = moreBtn.getBoundingClientRect();
       clickAt(r.left + r.width / 2, r.top + r.height / 2);
       moreBtn.click();
@@ -583,35 +583,43 @@
   }
 
   // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong hoàn toàn
+  function findDownloadSelection() {
+    const normalize = text => (text || '').normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '').replace(/\u0111/gi, 'd').toLowerCase().replace(/\s+/g, ' ').trim();
+    const elements = querySelectorAllDeep('[role="menuitem"], button, [role="button"], span');
+    for (const el of elements) {
+      if (!visible(el)) continue;
+      const labels = [el.innerText || el.textContent, el.getAttribute('aria-label')];
+      if (labels.some(label => /^(?:tai xuong phan da chon|download selection|download selected elements)$/.test(normalize(label)))) {
+        const target = el.closest('[role="menuitem"], button, [role="button"]') || el;
+        if (!target.disabled && target.getAttribute('aria-disabled') !== 'true') return target;
+      }
+    }
+    return null;
+  }
+
   async function extractLineImage() {
     showStatus('Bước 7: Đang chuẩn bị tải ảnh nét về Studio…');
 
-    // 1. Kiểm tra xem bảng "Tải xuống" đã mở sẵn chưa (như khi người dùng đã mở)
-    let confirmBtn = findPurpleDownloadButton();
-
-    if (!confirmBtn) {
-      // Mở menu "Chia sẻ"
-      const allButtons = querySelectorAllDeep('button, [role="button"]');
-      const shareBtn = allButtons.find(el => visible(el) && /^(?:chia sẻ|share)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
-      if (shareBtn) {
-        showStatus('Đang mở menu "Chia sẻ"…');
-        clickButtonReliable(shareBtn);
-        await sleep(1200);
-
-        // Nhấn mục "Tải xuống" trong menu
-        const dlMenuItem = querySelectorAllDeep('button, [role="menuitem"], [role="button"]').find(el => {
-          if (!visible(el)) return false;
-          const txt = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
-          return /^(?:tải xuống|download)$/i.test(txt);
-        });
-        if (dlMenuItem) {
-          showStatus('Đang mở bảng tùy chọn "Tải xuống"…');
-          clickButtonReliable(dlMenuItem);
-          await sleep(1500);
-        }
-      }
-      confirmBtn = findPurpleDownloadButton();
+    interceptedDownloadUrl = null;
+    // Use the selected artwork export, as offered by Canva's context menu.
+    let selectionItem = findDownloadSelection();
+    if (!selectionItem) {
+      sendKey('Escape', 'Escape', 27);
+      const center = getPageCenter();
+      clickAt(center.x, center.y);
+      await sleep(400);
+      openContextMenu(center.x, center.y, false);
+      selectionItem = await waitFor(() => findDownloadSelection(), 10,
+        'Không tìm thấy "Tải xuống phần đã chọn". Hãy kiểm tra tranh đang được chọn trên Canva.');
     }
+    showStatus('Đang chọn "Tải xuống phần đã chọn".');
+    selectionItem.click();
+    // Some Canva variants download immediately; others open export options.
+    const next = await waitFor(() => interceptedDownloadUrl || findPurpleDownloadButton(), 20,
+      'Canva chưa mở tùy chọn tải phần đã chọn. Hãy kiểm tra tab Canva.');
+    if (interceptedDownloadUrl) return await blobUrlToBase64(interceptedDownloadUrl);
+    let confirmBtn = next;
 
     if (!confirmBtn) {
       throw new Error('Không tìm thấy nút "Tải xuống" màu tím trên Canva. Hãy kiểm tra giao diện tải xuống.');

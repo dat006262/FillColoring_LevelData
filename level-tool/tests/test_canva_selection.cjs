@@ -1,0 +1,16 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync(require('node:path').join(__dirname, '../chrome-extension/canva.js'), 'utf8');
+const helper = source.slice(source.indexOf('  function findDownloadSelection()'), source.indexOf('  async function extractLineImage()'));
+let label = '', disabled = false;
+const target = { get disabled() { return disabled; }, getAttribute() { return null; } };
+const ctx = { visible: () => true, querySelectorAllDeep: () => [{ get innerText() { return label; }, getAttribute() { return null; }, closest() { return target; } }] };
+vm.createContext(ctx); vm.runInContext(helper, ctx);
+for (label of ['Tải xuống phần đã chọn', 'Download selection', 'Download selected elements']) assert.equal(ctx.findDownloadSelection(), target);
+for (label of ['Tải xuống', 'Download', 'Chia sẻ']) assert.equal(ctx.findDownloadSelection(), null);
+label = 'Download selection'; disabled = true; assert.equal(ctx.findDownloadSelection(), null);
+const flow = source.slice(source.indexOf('  async function extractLineImage()'), source.indexOf('  async function blobUrlToBase64('));
+assert.ok(flow.includes('openContextMenu(center.x, center.y, false)'));
+assert.ok(!flow.includes('shareBtn'));
+console.log('PASS: selected artwork menu in Vietnamese/English, disabled item, no Share route');
