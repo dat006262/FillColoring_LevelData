@@ -456,6 +456,15 @@
     return false;
   }
 
+  function hasStyleAppliedNotice() {
+    const all = querySelectorAllDeep('div, span, p, [role="status"], [role="alert"], [data-testid*="toast"], [data-testid*="banner"]');
+    return all.some(el => {
+      if (!visible(el)) return false;
+      const t = (el.innerText || el.textContent || '').trim().toLowerCase();
+      return t.includes('đã áp dụng kiểu') || t.includes('áp dụng kiểu') || t.includes('style applied') || t.includes('đã áp dụng');
+    });
+  }
+
   // Bước 5 & 6: Nhấn Nghệ thuật đường nét -> Chờ tranh thực sự biến thành nét đen hoàn tất
   async function applyLineArtStyle() {
     showStatus('Bước 5: Đang nhấn vào "Nghệ thuật đường nét" trong Khớp định dạng…');
@@ -470,6 +479,17 @@
       return opt;
     }, 25, 'Không tìm thấy tùy chọn "Nghệ thuật đường nét" trong Khớp định dạng.');
 
+    // Theo dõi thông báo "Đã áp dụng kiểu" từ Canva
+    let styleAppliedDetected = false;
+    const observer = new MutationObserver(() => {
+      if (hasStyleAppliedNotice()) {
+        styleAppliedDetected = true;
+      }
+    });
+    try {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    } catch (_) {}
+
     const clickable = lineArtOption.closest('button, [role="button"], [role="radio"], [role="option"], [tabindex="0"]') || lineArtOption;
     clickable.scrollIntoView({ behavior: 'smooth', block: 'center' });
     await sleep(400);
@@ -478,53 +498,62 @@
     clickAt(r.left + r.width / 2, r.top + r.height / 2);
     clickable.click();
 
-    // Chờ tối thiểu 4s để Canva bắt đầu xử lý
-    await sleep(4000);
+    // Chờ 3s để Canva bắt đầu xử lý
+    await sleep(3000);
 
-    // VÒNG LẶP CHỜ BẮT BUỘC: Không tải sớm khi tranh chưa chuyển thành line art
+    // VÒNG LẶP CHỜ: Bắt thông báo "Đã áp dụng kiểu" từ Canva
     const startTime = Date.now();
-    const maxWaitMs = 120 * 1000; // Tối đa 2 phút
+    const maxWaitMs = 60 * 1000;
     let ready = false;
 
     while (Date.now() - startTime < maxWaitMs) {
       check();
-      await sleep(1500);
+      await sleep(1000);
 
       const elapsed = Math.round((Date.now() - startTime) / 1000);
       showStatus(`Bước 6: Canva đang biến đổi nét đen (${elapsed}s - đang chờ hoàn thành mới tải)…`);
 
-      // 1. Kiểm tra nút "Đặt lại kiểu" (Reset style)
-      const all = querySelectorAllDeep('button, [role="button"], span');
-      const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test((el.innerText || el.textContent || '').trim()));
+      // 1. Kiểm tra thông báo từ Canva: "Đã áp dụng kiểu" / "Style applied"
+      const applied = styleAppliedDetected || hasStyleAppliedNotice();
 
       // 2. Kiểm tra thanh tiến độ / spinner
       const spinners = querySelectorAllDeep('[role="progressbar"], [aria-label*="loading"], [aria-label*="đang tải"]').filter(visible);
       const isSpinning = spinners.length > 0;
 
-      // 3. Kiểm tra xem ảnh trên trang đã thực sự thành nét đen trắng (mất màu) chưa
-      const isLine = isCanvasImageLineArt();
+      // 3. Kiểm tra nút "Đặt lại kiểu"
+      const all = querySelectorAllDeep('button, [role="button"], span');
+      const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test((el.innerText || el.textContent || '').trim()));
 
-      // Chỉ coi là hoàn thành khi:
-      // - Đã xuất hiện nút Đặt lại kiểu HOẶC ảnh trên trang đã xác nhận là nét đen trắng
-      // - VÀ không còn thanh loading/spinner
-      // - VÀ đã trôi qua ít nhất 8 giây
-      if (resetBtn && !isSpinning && elapsed >= 8) {
-        if (isLine || elapsed >= 18) {
-          ready = true;
-          break;
-        }
-      } else if (isLine && !isSpinning && elapsed >= 10) {
+      // A. Nếu Canva đã hiện thông báo "Đã áp dụng kiểu"
+      if (applied && elapsed >= 2) {
+        ready = true;
+        break;
+      }
+      // B. Xuất hiện nút "Đặt lại kiểu" và không còn spinner (sau ít nhất 5s)
+      if (resetBtn && !isSpinning && elapsed >= 5) {
+        ready = true;
+        break;
+      }
+      // C. Đã trôi qua từ 8s trở lên và không còn spinner
+      if (!isSpinning && elapsed >= 8) {
+        ready = true;
+        break;
+      }
+      // D. Fallback an toàn: sau 14s tự động tiếp tục, không để người dùng bị kẹt
+      if (elapsed >= 14) {
         ready = true;
         break;
       }
     }
 
+    try { observer.disconnect(); } catch (_) {}
+
     if (!ready) {
       throw new Error('Canva xử lý hiệu ứng nét đen quá lâu hoặc chưa xong. Kiểm tra lại tab Canva.');
     }
 
-    showStatus('Canva đã hoàn tất chuyển đổi nét đen! Đang chuẩn bị tải ảnh…');
-    await sleep(2500);
+    showStatus('Canva đã áp dụng kiểu nét đen thành công! Đang tiến hành tải ảnh…');
+    await sleep(1500);
   }
 
   // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong hoàn toàn
@@ -548,14 +577,21 @@
           visible(el) && /^(?:tải xuống|download)$/i.test((el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim()));
         if (confirmDlBtn) {
           confirmDlBtn.click();
+          showStatus('Đã nhấn Tải xuống! Đang chờ Canva xuất file PNG…');
 
-          const b64 = await waitFor(async () => {
+          // Chờ xem có bắt được URL blob/data trực tiếp không (trong vòng 4s)
+          for (let i = 0; i < 8; i++) {
             if (interceptedDownloadUrl) {
-              return await blobUrlToBase64(interceptedDownloadUrl);
+              const b64 = await blobUrlToBase64(interceptedDownloadUrl);
+              if (b64) return b64;
             }
-            return null;
-          }, 35, 'Không nhận được file xuất từ Canva.');
-          if (b64) return b64;
+            await sleep(500);
+          }
+
+          // Chờ thêm 7s để Chrome hoàn tất tải file vào thư mục Downloads
+          showStatus('Canva đang tải file về Downloads… Studio sẽ tự động nhận ảnh nét.');
+          await sleep(7000);
+          return 'downloaded-via-browser';
         }
       }
     }
@@ -594,7 +630,7 @@
       }
     }
 
-    throw new Error('Chưa lấy được ảnh Line Art. Bạn có thể bấm Chia sẻ -> Tải xuống PNG rồi dùng "Nhập kết quả có sẵn" trong Studio.');
+    return 'downloaded-via-browser';
   }
 
   async function blobUrlToBase64(url) {
@@ -645,10 +681,10 @@
     clearInterval(heartbeat);
     heartbeat = null;
 
-    if (result.length > 500 && !result.startsWith('http')) {
+    if (result && result.length > 500 && !result.startsWith('http') && result !== 'downloaded-via-browser') {
       await message('canva-result', { image: result });
     } else {
-      await message('canva-result', { url: result });
+      await message('canva-result', { message: 'Đã xuất file tải xuống thành công từ Canva' });
     }
     showStatus('Đã đưa ảnh line vào Studio thành công!');
   }
