@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="app-token"]').content;
 let state = {projects: [], jobs: {}, settings: {}}, selected = localStorage.getItem('selected-project'), tab = 'source';
 let signature = '', polling = false, mutation = false, overlaySerial = 0, overlayImage = null;
+let loopState = { active: false, total: 10, current: 0, baseName: '', stopRequested: false, timer: null, prompt: '', lastFinishedPid: null };
 const stageNames = {origin: 'Ảnh gốc', source: 'Line Canva', patch: 'Line đã vá', color: 'Ảnh màu', transparent: 'Line trong suốt'};
 const current = () => state.projects.find(p => p.id === selected);
 const version = (p, stage) => p?.versions[stage]?.find(v => v.id === p.selected[stage]);
@@ -33,6 +34,7 @@ async function refresh(force=false) {
     state = next;
     if (!current()) selected = state.projects[0]?.id;
     if (sig !== signature || force) { signature = sig; render(); }
+    checkLoopProgress();
   } catch (_) { $('connection').hidden = false; }
   finally { polling = false; }
 }
@@ -64,6 +66,7 @@ function renderLibrary() {
 
 function render() {
   renderLibrary();
+  updateLoopUI();
   const browserMode = state.settings.mode !== 'api';
   const aiReady = browserMode ? state.browser?.connected : state.settings.has_key;
   $('key-notice').hidden = browserMode || state.settings.has_key;
@@ -295,9 +298,170 @@ $('delete-button').onclick=async()=>{const p=current();if(!p)return;if(!confirm(
 $('cleanup-raw-btn').onclick=async()=>{try{const res=await api('cleanup',{mode:'raw'});const mb=(res.freed_bytes/(1024*1024)).toFixed(1);toast(`Đã dọn dẹp ${res.cleaned_items} file thô (giải phóng ~${mb} MB).`);await refresh(true);}catch(e){toast(e.message);}};
 $('cleanup-all-btn').onclick=async()=>{if(!confirm('CẢNH BÁO: Bạn có chắc chắn muốn xóa TẤT CẢ tranh trong thư viện không?'))return;try{const res=await api('cleanup',{mode:'all'});selected=null;localStorage.removeItem('selected-project');$('settings-dialog').close();toast(`Đã dọn dẹp sạch toàn bộ thư viện (${res.cleaned_items} tranh).`);await refresh(true);}catch(e){toast(e.message);}};
 $('processing-mode').onchange=modeFields;
+
+function updateLoopUI() {
+  const isLooping = loopState.active;
+  ['loop-start-header-btn', 'loop-start-bar-btn'].forEach(id => {
+    const el = $(id);
+    if (el) {
+      el.hidden = isLooping;
+      el.disabled = busy(current()) && !isLooping;
+    }
+  });
+  ['loop-stop-header-btn', 'loop-stop-bar-btn'].forEach(id => {
+    const el = $(id);
+    if (el) {
+      el.hidden = !isLooping;
+      if (isLooping) {
+        el.textContent = `🛑 Dừng lặp (${loopState.current}/${loopState.total})`;
+      }
+    }
+  });
+  const countInput = $('loop-count-input');
+  if (countInput) countInput.disabled = isLooping;
+
+  if (isLooping) {
+    const p = current();
+    const job = p ? state.jobs[p.id] : null;
+    const msg = job ? job.message : 'Đang chuẩn bị…';
+    $('job-status').hidden = false;
+    $('job-status').textContent = `[Bộ ${loopState.current}/${loopState.total}] ${msg}`;
+    $('job-status').className = 'running';
+  }
+}
+
+async function startLoop() {
+  if (loopState.active) return;
+  const countInput = $('loop-count-input');
+  const count = parseInt(countInput?.value || '10', 10);
+  if (isNaN(count) || count < 1) {
+    toast('Hãy nhập số lần lặp hợp lệ (tối thiểu 1 lần).');
+    return;
+  }
+  const total = Math.min(count, 100);
+
+  const browserMode = state.settings.mode !== 'api';
+  const aiReady = browserMode ? state.browser?.connected : state.settings.has_key;
+  if (!aiReady) {
+    toast(browserMode ? 'Chưa kết nối Chrome. Hãy giữ tab Studio mở trên Chrome có cài tiện ích.' : 'Chưa cấu hình Gemini API key.');
+    return;
+  }
+
+  const prompt = $('step1-prompt')?.value.trim() || state.settings.origin_prompt;
+  const currentProj = current();
+  const baseName = (currentProj?.name || 'level').replace(/_\d{2,}(_\d+)?$/, '').replace(/_\d+$/, '') || 'level';
+
+  loopState = {
+    active: true,
+    total: total,
+    current: 1,
+    baseName: baseName,
+    stopRequested: false,
+    timer: null,
+    prompt: prompt,
+    lastFinishedPid: null
+  };
+
+  updateLoopUI();
+  toast(`Bắt đầu chế độ lặp: Sẽ tự động tạo ${total} bộ tranh liên tục và xuất ra thư mục Output.`);
+
+  if (currentProj && !version(currentProj, 'origin') && state.jobs[currentProj.id]?.status !== 'running') {
+    await act('run', { action: 'all', prompt });
+  } else {
+    const ts = Date.now().toString().slice(-4);
+    const name = `${baseName}_${String(loopState.current).padStart(2, '0')}_${ts}`;
+    try {
+      const p = await api('create', { name, image: '', stage: 'origin' });
+      selected = p.id;
+      tab = 'origin';
+      localStorage.setItem('selected-project', selected);
+      await refresh(true);
+      await act('run', { action: 'all', prompt });
+    } catch (e) {
+      toast('Lỗi tạo tranh: ' + e.message);
+      stopLoop(false);
+    }
+  }
+}
+
+function stopLoop(success=false) {
+  if (!loopState.active && !loopState.timer) return;
+  const wasActive = loopState.active;
+  loopState.active = false;
+  loopState.stopRequested = true;
+  if (loopState.timer) {
+    clearTimeout(loopState.timer);
+    loopState.timer = null;
+  }
+  updateLoopUI();
+  if (wasActive && !success) {
+    toast(`Đã dừng chế độ chạy lặp (tại bộ ${loopState.current}/${loopState.total}).`);
+  }
+}
+
+async function checkLoopProgress() {
+  if (!loopState.active || loopState.stopRequested) return;
+
+  const p = current();
+  if (!p) return;
+  const job = state.jobs[p.id];
+  if (!job) return;
+
+  if (job.status === 'error' || job.status === 'cancelled') {
+    const stoppedAt = loopState.current;
+    const total = loopState.total;
+    stopLoop(false);
+    toast(`Vòng lặp dừng lại do lỗi ở bộ ${stoppedAt}/${total}: ${job.message}`);
+    return;
+  }
+
+  if (job.status === 'done' && p.exported) {
+    if (loopState.lastFinishedPid === p.id) return;
+    loopState.lastFinishedPid = p.id;
+
+    if (loopState.current >= loopState.total) {
+      const totalDone = loopState.total;
+      stopLoop(true);
+      toast(`🎉 ĐÃ HOÀN TẤT TOÀN BỘ ${totalDone} BỘ TRANH! Đã xuất đủ 5 ảnh mỗi bộ ra thư mục Output.`);
+      return;
+    }
+
+    const nextIter = loopState.current + 1;
+    toast(`Bộ ${loopState.current}/${loopState.total} đã xong! Chuẩn bị tạo tiếp bộ ${nextIter}/${loopState.total} sau 3 giây…`);
+
+    loopState.timer = setTimeout(async () => {
+      if (!loopState.active || loopState.stopRequested) return;
+      loopState.current = nextIter;
+      updateLoopUI();
+
+      try {
+        const ts = Date.now().toString().slice(-4);
+        const nextName = `${loopState.baseName}_${String(nextIter).padStart(2, '0')}_${ts}`;
+        const newProj = await api('create', { name: nextName, image: '', stage: 'origin' });
+        selected = newProj.id;
+        tab = 'origin';
+        localStorage.setItem('selected-project', selected);
+        await refresh(true);
+        await act('run', { action: 'all', prompt: loopState.prompt });
+      } catch (err) {
+        toast(`Lỗi khi tạo bộ ${nextIter}: ${err.message}`);
+        stopLoop(false);
+      }
+    }, 3000);
+  }
+}
+
 ['stop-job-header-btn','stop-job-bar-btn','cancel-browser'].forEach(id=>{
   const el = $(id);
-  if (el) el.onclick = () => act('cancel-browser');
+  if (el) el.onclick = () => { stopLoop(false); act('cancel-browser'); };
+});
+['loop-start-header-btn', 'loop-start-bar-btn'].forEach(id => {
+  const el = $(id);
+  if (el) el.onclick = startLoop;
+});
+['loop-stop-header-btn', 'loop-stop-bar-btn'].forEach(id => {
+  const el = $(id);
+  if (el) el.onclick = () => stopLoop(false);
 });
 $('export-button').onclick=()=>act('export');
 $('version').onchange=()=>act('select',{stage:tab,version:$('version').value});
