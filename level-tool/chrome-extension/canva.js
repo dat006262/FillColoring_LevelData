@@ -5,7 +5,7 @@
  * 3. Chuột phải vào ảnh / bấm "..." -> chọn "Đổi cỡ khung vẽ cho vừa với vùng chọn".
  * 4. Click chọn ảnh -> nhấn nút "Chỉnh sửa" trên thanh công cụ -> hiện cửa sổ "Sửa hình ảnh".
  * 5. Trong mục "Khớp định dạng", nhấn "Nghệ thuật đường nét" (Line art).
- * 6. Chờ tranh được chuyển đổi nét đen hoàn tất (xuất hiện nút Đặt lại kiểu, hết spinner).
+ * 6. Chờ tranh thực sự biến đổi xong thành nét đen (kiểm tra pixel mất màu & nút Đặt lại kiểu), KHÔNG tải sớm.
  * 7. Tải / trích xuất ảnh nét và gửi về Studio dưới tên [picture_name]_line_notpatch.png.
  */
 (() => {
@@ -77,7 +77,7 @@
       Object.assign(banner.style, {
         position: 'fixed', bottom: '16px', right: '16px', zIndex: '2147483647',
         background: '#00c4cc', color: '#0e1318', padding: '12px 20px', borderRadius: '10px',
-        fontWeight: 'bold', font: '13px Segoe UI, sans-serif', maxWidth: '560px', pointerEvents: 'none',
+        fontWeight: 'bold', font: '13px Segoe UI, sans-serif', maxWidth: '580px', pointerEvents: 'none',
         boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
       });
       document.body.append(banner);
@@ -130,7 +130,6 @@
   }
 
   function openContextMenu(x, y) {
-    // 1. Try finding the "..." (Tùy chọn khác / More) button on the floating selection action bar
     const moreBtn = querySelectorAllDeep('button, [role="button"]').find(el => {
       if (!visible(el)) return false;
       const aria = (el.getAttribute('aria-label') || '').trim();
@@ -148,7 +147,6 @@
       return;
     }
 
-    // 2. Dispatch real right-click pointer & mouse sequence
     const target = document.elementFromPoint(x, y) || document.body;
     const opts = {
       bubbles: true,
@@ -257,19 +255,15 @@
     let resizeOption = null;
 
     for (let attempt = 0; attempt < 6; attempt++) {
-      // 1. Click chọn ảnh
       clickAt(center.x, center.y);
       await sleep(400);
 
-      // 2. Mở context menu (qua nút "..." hoặc click chuột phải)
       openContextMenu(center.x, center.y);
       await sleep(700);
 
-      // 3. Tìm dòng "Đổi cỡ khung vẽ cho vừa với vùng chọn"
       resizeOption = findResizeOption();
       if (resizeOption) break;
 
-      // Nếu chưa ra, thử click hơi lệch tâm rồi chuột phải lại
       const offsets = [30, -30, 50, -50];
       const dx = offsets[attempt % offsets.length];
       clickAt(center.x + dx, center.y + dx);
@@ -288,7 +282,6 @@
       resizeOption.click();
       await sleep(1000);
 
-      // Nếu có hộp thoại xác nhận đổi cỡ (vd: "Đổi cỡ thiết kế này" / "Đổi cỡ"), bấm xác nhận
       const confirmResize = querySelectorAllDeep('button, [role="button"]').find(el => {
         if (!visible(el)) return false;
         const t = (el.innerText || el.textContent || el.getAttribute('aria-label') || '').trim();
@@ -299,7 +292,6 @@
         await sleep(800);
       }
     } else {
-      // Dự phòng: "Đặt hình ảnh làm nền"
       const menuItems = querySelectorAllDeep('button, [role="menuitem"], [role="button"], div[tabindex="0"], span');
       const setBgOption = menuItems.find(el => {
         if (!visible(el)) return false;
@@ -314,7 +306,6 @@
       }
     }
 
-    // Click lại vào tâm ảnh để đưa ảnh vào trạng thái đang chọn (Selected)
     await sleep(400);
     clickAt(center.x, center.y);
     await sleep(500);
@@ -404,7 +395,68 @@
     await sleep(1500);
   }
 
-  // Bước 5 & 6: Nhấn Nghệ thuật đường nét -> Chờ tranh được chỉnh sửa xong hoàn toàn
+  // Kiểm tra xem ảnh trên trang đã biến thành nét vẽ đen trắng hay chưa (không còn màu)
+  function isCanvasImageLineArt() {
+    const stage = getCanvasStage();
+
+    // 1. Kiểm tra các thẻ img trên stage
+    const imgs = [...stage.querySelectorAll('img')].filter(img =>
+      visible(img) && img.naturalWidth >= 200 && img.naturalHeight >= 200 &&
+      !img.closest('nav, aside, [role="region"], [data-testid*="sidebar"], [data-testid*="panel"]')
+    );
+    for (const img of imgs) {
+      try {
+        const c = document.createElement('canvas');
+        c.width = 64; c.height = 64;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 64, 64);
+        const data = ctx.getImageData(0, 0, 64, 64).data;
+        let colorPixels = 0;
+        let total = 64 * 64;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          if (a > 30) {
+            const diff = Math.max(r, g, b) - Math.min(r, g, b);
+            if (diff > 25) colorPixels++;
+          }
+        }
+        // Nếu pixel có màu sắc > 8%, tranh vẫn còn là ảnh màu, chưa thành line art!
+        if (colorPixels / total > 0.08) {
+          return false;
+        }
+        return true;
+      } catch (_) {}
+    }
+
+    // 2. Kiểm tra các thẻ canvas trên stage
+    const canvases = [...stage.querySelectorAll('canvas')].filter(c => c.width >= 300 && c.height >= 300);
+    for (const cv of canvases) {
+      try {
+        const c = document.createElement('canvas');
+        c.width = 64; c.height = 64;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(cv, 0, 0, 64, 64);
+        const data = ctx.getImageData(0, 0, 64, 64).data;
+        let colorPixels = 0;
+        let total = 64 * 64;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+          if (a > 30) {
+            const diff = Math.max(r, g, b) - Math.min(r, g, b);
+            if (diff > 25) colorPixels++;
+          }
+        }
+        if (colorPixels / total > 0.08) {
+          return false;
+        }
+        return true;
+      } catch (_) {}
+    }
+
+    return false;
+  }
+
+  // Bước 5 & 6: Nhấn Nghệ thuật đường nét -> Chờ tranh thực sự biến thành nét đen hoàn tất
   async function applyLineArtStyle() {
     showStatus('Bước 5: Đang nhấn vào "Nghệ thuật đường nét" trong Khớp định dạng…');
 
@@ -426,25 +478,58 @@
     clickAt(r.left + r.width / 2, r.top + r.height / 2);
     clickable.click();
 
-    showStatus('Bước 6: Canva đang chuyển đổi sang nét đen (vui lòng chờ xong mới tải)…');
-    await sleep(6000);
+    // Chờ tối thiểu 4s để Canva bắt đầu xử lý
+    await sleep(4000);
 
-    await waitFor(() => {
+    // VÒNG LẶP CHỜ BẮT BUỘC: Không tải sớm khi tranh chưa chuyển thành line art
+    const startTime = Date.now();
+    const maxWaitMs = 120 * 1000; // Tối đa 2 phút
+    let ready = false;
+
+    while (Date.now() - startTime < maxWaitMs) {
+      check();
+      await sleep(1500);
+
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      showStatus(`Bước 6: Canva đang biến đổi nét đen (${elapsed}s - đang chờ hoàn thành mới tải)…`);
+
+      // 1. Kiểm tra nút "Đặt lại kiểu" (Reset style)
       const all = querySelectorAllDeep('button, [role="button"], span');
       const resetBtn = all.find(el => visible(el) && /đặt lại kiểu|reset style/i.test((el.innerText || el.textContent || '').trim()));
-      if (resetBtn) return true;
 
+      // 2. Kiểm tra thanh tiến độ / spinner
       const spinners = querySelectorAllDeep('[role="progressbar"], [aria-label*="loading"], [aria-label*="đang tải"]').filter(visible);
-      return spinners.length === 0;
-    }, 45, 'Canva xử lý hiệu ứng nét đen quá lâu.');
+      const isSpinning = spinners.length > 0;
 
-    showStatus('Canva đã hoàn tất nét vẽ. Đang chuẩn bị tải ảnh…');
-    await sleep(3000);
+      // 3. Kiểm tra xem ảnh trên trang đã thực sự thành nét đen trắng (mất màu) chưa
+      const isLine = isCanvasImageLineArt();
+
+      // Chỉ coi là hoàn thành khi:
+      // - Đã xuất hiện nút Đặt lại kiểu HOẶC ảnh trên trang đã xác nhận là nét đen trắng
+      // - VÀ không còn thanh loading/spinner
+      // - VÀ đã trôi qua ít nhất 8 giây
+      if (resetBtn && !isSpinning && elapsed >= 8) {
+        if (isLine || elapsed >= 18) {
+          ready = true;
+          break;
+        }
+      } else if (isLine && !isSpinning && elapsed >= 10) {
+        ready = true;
+        break;
+      }
+    }
+
+    if (!ready) {
+      throw new Error('Canva xử lý hiệu ứng nét đen quá lâu hoặc chưa xong. Kiểm tra lại tab Canva.');
+    }
+
+    showStatus('Canva đã hoàn tất chuyển đổi nét đen! Đang chuẩn bị tải ảnh…');
+    await sleep(2500);
   }
 
-  // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong
+  // Bước 7: Tải / Trích xuất ảnh Line Art sau khi đã chỉnh sửa xong hoàn toàn
   async function extractLineImage() {
-    showStatus('Bước 7: Đang tải ảnh nét về Studio…');
+    showStatus('Bước 7: Đang tải ảnh nét đã hoàn thiện về Studio…');
 
     // 1. Xuất chính thức từ Canva: Chia sẻ -> Tải xuống -> Tải xuống
     const allButtons = querySelectorAllDeep('button, [role="button"]');
@@ -547,7 +632,7 @@
     await openEditPanel();
     check();
 
-    // 5 & 6. Nhấn "Nghệ thuật đường nét" -> Chờ chỉnh sửa xong hoàn toàn
+    // 5 & 6. Nhấn "Nghệ thuật đường nét" -> Chờ tranh thực sự biến thành nét đen hoàn tất (KHÔNG tải sớm)
     await applyLineArtStyle();
     check();
 

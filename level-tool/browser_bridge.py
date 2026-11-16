@@ -150,16 +150,22 @@ class BrowserBridge:
                 progress(request['message'])
                 if stage == 'source' and 'canva.com' in url and downloads_dir.exists():
                     try:
-                        for entry in downloads_dir.glob('*.png'):
+                        for entry in sorted(downloads_dir.glob('*.png'), key=lambda e: e.stat().st_mtime, reverse=True):
                             if entry.is_file() and entry.stat().st_mtime >= task_start - 2:
                                 s1 = entry.stat().st_size
                                 if s1 > 5000:
                                     time.sleep(0.3)
                                     if entry.stat().st_size == s1:
-                                        request['result'] = entry.read_bytes()
-                                        request['page_url'] = url
-                                        request['event'].set()
-                                        break
+                                        raw_bytes = entry.read_bytes()
+                                        try:
+                                            from core import validate_artwork, read_image
+                                            validate_artwork(read_image(raw_bytes), 'source')
+                                            request['result'] = raw_bytes
+                                            request['page_url'] = url
+                                            request['event'].set()
+                                            break
+                                        except Exception:
+                                            continue
                     except Exception:
                         pass
                 if time.monotonic() >= deadline:
