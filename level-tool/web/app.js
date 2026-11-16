@@ -273,7 +273,7 @@ document.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.
 document.querySelectorAll('[data-run]').forEach(b=>b.onclick=()=>{
   const action = b.dataset.run;
   let prompt = undefined;
-  if (action === 'origin') {
+  if (action === 'origin' || action === 'all') {
     prompt = $('step1-prompt')?.value.trim() || state.settings.origin_prompt;
   }
   act('run', { action, prompt });

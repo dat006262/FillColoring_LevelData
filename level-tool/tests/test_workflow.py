@@ -38,7 +38,9 @@ class FakeGemini:
         self.calls += 1
         if self.fail:
             raise WorkflowError('Lỗi API thử nghiệm')
-        return png_bytes(artwork('patch' if prompt == PATCH_PROMPT else 'color', self.size or image.size)), {'model': 'fake'}
+        size = self.size or (image.size if image else (1024, 1024))
+        is_color = ('output requirement' in prompt.lower() or not image or 'tô màu' in prompt.lower() or 'color' in prompt.lower())
+        return png_bytes(artwork('color' if is_color else 'patch', size)), {'model': 'fake'}
 
 
 class WorkflowTests(unittest.TestCase):
@@ -126,6 +128,26 @@ class WorkflowTests(unittest.TestCase):
         self.store.export(self.pid)
         with self.assertRaises(WorkflowError): self.store.run(self.pid, 'color')
         self.assertEqual(self.client.calls, 0)
+
+
+    def test_run_all_five_steps_pipeline(self):
+        from core import SUFFIX
+        p = self.store.create('test_auto_all', '', 'origin')
+        self.store.run(p['id'], 'all')
+        deadline = time.monotonic() + 10
+        while p['id'] in self.store.jobs and self.store.jobs[p['id']]['status'] == 'running':
+            time.sleep(0.05)
+            if time.monotonic() > deadline:
+                break
+        res = self.store.jobs[p['id']]
+        self.assertEqual(res['status'], 'done')
+        project = self.store.load(p['id'])
+        for stage in ('origin', 'source', 'patch', 'color', 'transparent'):
+            self.assertTrue(project['selected'].get(stage), f"Missing selected {stage}")
+        # Verify all 5 files in output_dir
+        for stage, suffix in SUFFIX.items():
+            expected_file = self.store.output_dir / f"test_auto_all_{suffix}.png"
+            self.assertTrue(expected_file.exists(), f"File {expected_file} was not exported")
 
     def test_dimensions_normalized_or_rejected_without_losing_raw(self):
         self.client.size = (64, 64)

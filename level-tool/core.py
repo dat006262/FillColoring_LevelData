@@ -457,7 +457,7 @@ class Store:
     def run(self, pid, action, prompt=None):
         with self.lock:
             self.ensure_idle(pid)
-            allowed_actions = ('origin', 'canva-line', 'patch', 'color', 'color-gemini', 'color-aistudio', 'transparent', 'finish')
+            allowed_actions = ('origin', 'canva-line', 'patch', 'color', 'color-gemini', 'color-aistudio', 'transparent', 'finish', 'all')
             if action not in allowed_actions:
                 raise WorkflowError('Thao tác không hợp lệ.')
             project = self.load(pid)
@@ -494,7 +494,12 @@ class Store:
 
     def _worker(self, pid, action, key, config):
         try:
-            steps = ['transparent', 'color-aistudio'] if action == 'finish' else [action]
+            if action == 'finish':
+                steps = ['transparent', 'color-aistudio']
+            elif action == 'all':
+                steps = ['origin', 'canva-line', 'patch', 'color-aistudio', 'transparent']
+            else:
+                steps = [action]
             for act in steps:
                 if act == 'origin':
                     stage = 'origin'
@@ -528,8 +533,11 @@ class Store:
                     elif act == 'patch':
                         parent = self.version(project, 'source')
                         source = self.image(project, parent)
-                    else:
-                        parent = self.approved_patch(project)
+                    elif act in ('color', 'color-aistudio', 'color-gemini'):
+                        parent = self.version(project, 'patch') if action == 'all' else self.approved_patch(project)
+                        source = self.image(project, parent)
+                    else:  # transparent
+                        parent = self.version(project, 'patch') if action == 'all' else self.approved_patch(project)
                         source = self.image(project, parent)
 
                 metadata = {'processor': 'local-darkness-alpha'}
@@ -562,7 +570,7 @@ class Store:
                             pid, stage, project['name'], prompt, in_bytes,
                             target_url, config['browser_email'], progress)
                     else:
-                        if act == 'canva-line':
+                        if act == 'canva-line' and isinstance(self.client, Gemini):
                             raise WorkflowError('Canva chỉ chạy qua tiện ích Chrome (chế độ browser).')
                         raw, metadata = self.client.generate(key, config['model'], prompt, source)
 
@@ -588,18 +596,29 @@ class Store:
                     project = self.load(pid)
                     self.invalidate(project, stage)
                     self.add_version(project, stage, image, parent['id'] if parent else None, metadata)
+                    if action == 'all':
+                        if stage == 'patch':
+                            project['approved']['patch'] = project['selected']['patch']
+                        elif stage == 'color':
+                            project['approved']['color'] = project['selected']['color']
                     self.save(project)
-            with self.lock:
-                self.jobs[pid].update(status='done', message='Xử lý xong. Hãy xem và duyệt kết quả.', finished_at=now())
+            if action == 'all':
+                self.export(pid, allow_running=True)
+                with self.lock:
+                    self.jobs[pid].update(status='done', message='Đã hoàn thành xuất sắc toàn bộ 5 bước! 5 ảnh đã được xuất ra thư mục output.', finished_at=now())
+            else:
+                with self.lock:
+                    self.jobs[pid].update(status='done', message='Xử lý xong. Hãy xem và duyệt kết quả.', finished_at=now())
         except Exception as exc:
             message = str(exc) if isinstance(exc, (WorkflowError, BrowserError)) else 'Xử lý thất bại. Kiểm tra file đầu vào và quyền ghi thư mục dữ liệu.'
             with self.lock:
                 self.jobs[pid].update(status='error', message=message, finished_at=now())
                 atomic_json(self.directory(pid) / 'last-error.json', self.jobs[pid])
 
-    def export(self, pid):
+    def export(self, pid, allow_running=False):
         with self.lock:
-            self.ensure_idle(pid)
+            if not allow_running:
+                self.ensure_idle(pid)
             project = self.load(pid)
             patch = self.approved_patch(project)
             color = self.version(project, 'color')
