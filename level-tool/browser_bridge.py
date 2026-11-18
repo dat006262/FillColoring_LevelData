@@ -60,16 +60,35 @@ class BrowserBridge:
     def status(self):
         with self.lock:
             return {'connected': self.agent is not None and time.monotonic() - self.last_seen < self.CONNECTION_TIMEOUT,
-                    'pending': sum(not r['event'].is_set() for r in self.requests.values())}
+                    'pending': sum(not r['event'].is_set() for r in self.requests.values()),
+                    'browser': getattr(self, 'agent_browser', 'unknown')}
 
-    def poll(self, agent):
+    def poll(self, agent, browser='unknown', has_studio=False):
         if not isinstance(agent, str) or len(agent) < 10 or len(agent) > 100:
-            raise BrowserError('Mã kết nối Chrome không hợp lệ.')
+            raise BrowserError('Mã kết nối trình duyệt không hợp lệ.')
         with self.lock:
-            if self.agent and self.agent != agent and self.status()['connected']:
-                raise BrowserError('Một phiên Chrome khác đang kết nối. Đóng trang Studio ở phiên đó trước.')
-            self.agent = agent
+            current_browser = getattr(self, 'agent_browser', 'unknown')
+            current_has_studio = getattr(self, 'agent_has_studio', False)
+            is_connected = self.status()['connected']
+
+            # Cốc Cốc hoặc phiên đang mở tab Studio được ưu tiên chiếm quyền điều khiển ngay
+            should_takeover = (
+                not is_connected or
+                (browser == 'coccoc' and current_browser != 'coccoc') or
+                (has_studio and not current_has_studio)
+            )
+
+            if self.agent and self.agent != agent and is_connected and not should_takeover:
+                raise BrowserError('Một phiên trình duyệt khác đang kết nối. Đóng trang Studio ở phiên đó trước.')
+
+            if should_takeover or self.agent != agent:
+                self.agent = agent
+                self.agent_browser = browser
+                self.agent_has_studio = has_studio
+
             self.last_seen = time.monotonic()
+            if has_studio:
+                self.agent_has_studio = True
             # A claimed operation is never reissued: do not submit duplicate prompts
             # after extension/service-worker reload or a lost response.
             if any(r['claimed'] and not r['event'].is_set() for r in self.requests.values()):

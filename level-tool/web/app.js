@@ -71,7 +71,8 @@ function render() {
   const aiReady = browserMode ? state.browser?.connected : state.settings.has_key;
   $('key-notice').hidden = browserMode || state.settings.has_key;
   $('browser-notice').hidden = !browserMode;
-  $('browser-status').textContent = state.browser?.connected ? 'Chrome đã kết nối · Gemini & Canva · Không dùng API key' : 'Chưa kết nối Chrome. Cài tiện ích rồi mở trang này trong Chrome đã đăng nhập Google & Canva.';
+  const bName = state.browser?.browser === 'coccoc' ? 'Cốc Cốc' : 'Chrome';
+  $('browser-status').textContent = state.browser?.connected ? `${bName} đã kết nối · Gemini & Canva · Không dùng API key` : 'Chưa kết nối trình duyệt. Cài tiện ích rồi mở trang này trong Cốc Cốc (hoặc Chrome) đã đăng nhập Google & Canva.';
   const p = current();
   $('empty').hidden = !!p; $('workspace').hidden = !p; $('folder-button').hidden = !p; $('delete-button').hidden = !p;
   $('project-title').textContent = p?.name || 'Từ tranh gốc đến bộ level hoàn chỉnh';
@@ -362,7 +363,8 @@ async function startLoop() {
   const browserMode = state.settings.mode !== 'api';
   const aiReady = browserMode ? state.browser?.connected : state.settings.has_key;
   if (!aiReady) {
-    toast(browserMode ? 'Chưa kết nối Chrome. Hãy giữ tab Studio mở trên Chrome có cài tiện ích.' : 'Chưa cấu hình Gemini API key.');
+    const bName = state.browser?.browser === 'coccoc' ? 'Cốc Cốc' : 'trình duyệt (Cốc Cốc/Chrome)';
+    toast(browserMode ? `Chưa kết nối ${bName}. Hãy giữ tab Studio mở trên ${bName} có cài tiện ích.` : 'Chưa cấu hình Gemini API key.');
     return;
   }
 

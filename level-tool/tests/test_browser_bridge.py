@@ -106,6 +106,20 @@ class BridgeTests(unittest.TestCase):
             self.bridge.cancel('project')
             thread.join(4)
 
+    def test_coccoc_takeover_from_idle_chrome(self):
+        bridge = BrowserBridge(timeout=3)
+        chrome_agent = 'chrome-agent-9999'
+        coccoc_agent = 'coccoc-agent-8888'
+        bridge.poll(chrome_agent, browser='chrome', has_studio=False)
+        self.assertEqual(bridge.status()['browser'], 'chrome')
+        # Cốc Cốc with open studio tab takes over immediately
+        bridge.poll(coccoc_agent, browser='coccoc', has_studio=True)
+        self.assertEqual(bridge.status()['browser'], 'coccoc')
+        self.assertEqual(bridge.agent, coccoc_agent)
+        # Background Chrome cannot steal connection back while Cốc Cốc is active
+        with self.assertRaises(BrowserError):
+            bridge.poll(chrome_agent, browser='chrome', has_studio=False)
+
     def test_wrong_site_and_browser_rejected(self):
         with self.assertRaises(BrowserError): self.bridge.poll('another-browser-0001')
         for url in ['http://gemini.google.com/app','https://evil.test/app','https://gemini.google.com.evil.test/app','https://gemini.google.com@evil.test/app','https://gemini.google.com/u/2/app/old-chat']:

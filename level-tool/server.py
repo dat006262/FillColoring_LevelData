@@ -102,7 +102,11 @@ def make_server(store, port=0):
                     raise WorkflowError('Yêu cầu không hợp lệ.')
                 pid = data.get('id')
                 if path == '/api/browser/poll':
-                    result = {'task': store.browser.poll(data.get('agent'))}
+                    result = {'task': store.browser.poll(
+                        data.get('agent'),
+                        browser=data.get('browser', 'unknown'),
+                        has_studio=bool(data.get('has_studio', False))
+                    )}
                 elif path == '/api/browser/payload':
                     result = {'task': store.browser.payload(data.get('task_id'), data.get('lease'), data.get('agent'))}
                 elif path == '/api/browser/report':
