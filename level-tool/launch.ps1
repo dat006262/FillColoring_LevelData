@@ -6,30 +6,13 @@ $ErrorActionPreference = 'Stop'
 $toolDir = $PSScriptRoot
 $url = 'http://127.0.0.1:8765'
 
-function Open-StudioBrowser($targetUrl) {
-    $coccocCandidates = @(
-        (Join-Path $env:LOCALAPPDATA 'CocCoc\Browser\Application\browser.exe'),
-        'C:\Program Files\CocCoc\Browser\Application\browser.exe',
-        'C:\Program Files (x86)\CocCoc\Browser\Application\browser.exe'
-    )
-    foreach ($candidate in $coccocCandidates) {
-        if (Test-Path -LiteralPath $candidate) {
-            Write-Host "Dang mo FillColoring Studio bang Coc Coc..." -ForegroundColor Green
-            Start-Process -FilePath $candidate -ArgumentList $targetUrl
-            return
-        }
-    }
-    # Fallback to default browser if Coc Coc is not installed
-    Start-Process $targetUrl
-}
-
 # If server is already running and healthy, simply open it in browser (unless -Restart requested)
 if (-not $Restart) {
     try {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 2
         if ($health -and $health.app -eq 'FillColoring Studio') {
             Write-Host "FillColoring Studio dang chay. Dang mo trinh duyet..." -ForegroundColor Green
-            Open-StudioBrowser $url
+            Start-Process $url
             exit 0
         }
     } catch { }
@@ -84,7 +67,7 @@ for ($i = 0; $i -lt 30; $i++) {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 1
         if ($health -and $health.app -eq 'FillColoring Studio') {
             Write-Host "Khoi dong thanh cong! Dang mo: $url" -ForegroundColor Green
-            Open-StudioBrowser $url
+            Start-Process $url
             exit 0
         }
     } catch { }
