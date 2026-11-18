@@ -62,6 +62,8 @@ async function report(active, data) {
 async function focusTaskTab(tabId) {
   if (!tabId) return;
   try {
+    const { forceFocus = true } = await chrome.storage.session.get('forceFocus');
+    if (!forceFocus) return;
     const tab = await chrome.tabs.get(tabId);
     if (!tab) return;
     await chrome.tabs.update(tabId, { active: true, highlighted: true });
@@ -208,15 +210,23 @@ async function dispatch(msg, sender) {
   const origin = new URL(sender.url || sender.tab.url).origin;
   if (msg.type === 'studio-heartbeat') {
     if (origin !== SERVER || typeof msg.token !== 'string' || msg.token.length < 20) throw new Error('Kết nối không hợp lệ.');
+    const forceFocus = msg.forceFocus !== false;
     await chrome.storage.session.set({
       connection: { token: msg.token },
       lastStudioTab: Date.now(),
-      studioWindowId: sender.tab?.windowId
+      studioWindowId: sender.tab?.windowId,
+      forceFocus
     });
     // Do not overwrite a refreshed token with one from an old Studio tab.
     if (!(await context()).connection) await reconnect();
     await tick();
-    return { ok: true };
+    return { ok: true, forceFocus };
+  }
+  if (msg.type === 'set-force-focus') {
+    if (origin !== SERVER) throw new Error('Chỉ nhận cài đặt từ FillColoring Studio.');
+    const forceFocus = msg.forceFocus !== false;
+    await chrome.storage.session.set({ forceFocus });
+    return { ok: true, forceFocus };
   }
   if (origin !== 'https://gemini.google.com' && origin !== 'https://aistudio.google.com' && origin !== 'https://www.canva.com' && origin !== 'https://canva.com') {
     throw new Error('Chỉ nhận phản hồi từ Gemini, Google AI Studio hoặc Canva.');
@@ -317,8 +327,8 @@ setInterval(tick, 5000);
 // Periodically reinforce task tab focus to prevent background tab throttling during all steps
 setInterval(async () => {
   try {
-    const { active } = await chrome.storage.session.get('active');
-    if (active?.tabId) {
+    const { active, forceFocus = true } = await chrome.storage.session.get(['active', 'forceFocus']);
+    if (forceFocus && active?.tabId) {
       await focusTaskTab(active.tabId);
     }
   } catch (_) {}

@@ -284,6 +284,7 @@ async function showSettings(){
   $('aistudio-origin-url').value=s.aistudio_origin_url||'https://aistudio.google.com/u/2/prompts/new_chat';
   $('aistudio-url').value=s.aistudio_url||'https://aistudio.google.com/u/2/prompts/1wN9BKl3arwh3KcwLRU01EaNeB7JoSw7o';
   $('browser-email').value=s.browser_email||'mongnangthoi@gmail.com';
+  if ($('setting-force-focus')) $('setting-force-focus').checked = localStorage.getItem('force-focus') !== 'false';
   modeFields();
   $('api-key').value='';
   $('key-state').textContent=s.key_error||(s.has_key?'Đã có khóa. Để trống nếu giữ khóa hiện tại.':'Chưa cấu hình API key.');
@@ -317,6 +318,29 @@ $('delete-button').onclick=async()=>{const p=current();if(!p)return;if(!confirm(
 $('cleanup-raw-btn').onclick=async()=>{try{const res=await api('cleanup',{mode:'raw'});const mb=(res.freed_bytes/(1024*1024)).toFixed(1);toast(`Đã dọn dẹp ${res.cleaned_items} file thô (giải phóng ~${mb} MB).`);await refresh(true);}catch(e){toast(e.message);}};
 $('cleanup-all-btn').onclick=async()=>{if(!confirm('CẢNH BÁO: Bạn có chắc chắn muốn xóa TẤT CẢ tranh trong thư viện không?'))return;try{const res=await api('cleanup',{mode:'all'});selected=null;localStorage.removeItem('selected-project');$('settings-dialog').close();toast(`Đã dọn dẹp sạch toàn bộ thư viện (${res.cleaned_items} tranh).`);await refresh(true);}catch(e){toast(e.message);}};
 $('processing-mode').onchange=modeFields;
+
+function setForceFocus(enabled, notify = false) {
+  localStorage.setItem('force-focus', enabled ? 'true' : 'false');
+  ['toggle-force-focus', 'toggle-force-focus-bar', 'setting-force-focus'].forEach(id => {
+    const el = $(id);
+    if (el) el.checked = enabled;
+  });
+  window.postMessage({ type: 'studio-toggle-force-focus', forceFocus: enabled }, '*');
+  if (notify) {
+    toast(enabled
+      ? '🎯 Đã BẬT buộc focus: Tự động kéo tab tác vụ lên trước khi xử lý.'
+      : '🕊️ Đã TẮT buộc focus: Tab tác vụ sẽ chạy ngầm không giật màn hình.');
+  }
+}
+
+const initialForceFocus = localStorage.getItem('force-focus') !== 'false';
+['toggle-force-focus', 'toggle-force-focus-bar', 'setting-force-focus'].forEach(id => {
+  const el = $(id);
+  if (el) {
+    el.checked = initialForceFocus;
+    el.onchange = (e) => setForceFocus(e.target.checked, true);
+  }
+});
 
 function updateLoopUI() {
   const isLooping = loopState.active;
