@@ -99,8 +99,17 @@ async function openTaskTab(task) {
       if (matchesTaskTab(old.url, new URL(url))) await chrome.tabs.remove(tabId);
     } catch (_) { /* Already closed or no longer accessible. */ }
   }
-  // Install the lease before navigation so content scripts cannot miss it.
-  const page = await chrome.tabs.create({ url: 'about:blank', active: true });
+  // Create the task tab in the EXACT window where FillColoring Studio is currently open
+  // This guarantees tabs (AI Studio, Canva, Gemini) stay on the same Virtual Desktop (e.g. Desktop 2)
+  const { studioWindowId } = await chrome.storage.session.get('studioWindowId');
+  const createProps = { url: 'about:blank', active: true };
+  if (studioWindowId) {
+    try {
+      await chrome.windows.get(studioWindowId);
+      createProps.windowId = studioWindowId;
+    } catch (_) {}
+  }
+  const page = await chrome.tabs.create(createProps);
   const { image, ...metadata } = task;
   await chrome.storage.session.set({
     taskTabs: { [target.href]: page.id },
@@ -199,6 +208,11 @@ async function dispatch(msg, sender) {
   const origin = new URL(sender.url || sender.tab.url).origin;
   if (msg.type === 'studio-heartbeat') {
     if (origin !== SERVER || typeof msg.token !== 'string' || msg.token.length < 20) throw new Error('Kết nối không hợp lệ.');
+    await chrome.storage.session.set({
+      connection: { token: msg.token },
+      lastStudioTab: Date.now(),
+      studioWindowId: sender.tab?.windowId
+    });
     // Do not overwrite a refreshed token with one from an old Studio tab.
     if (!(await context()).connection) await reconnect();
     await tick();
@@ -225,7 +239,15 @@ async function dispatch(msg, sender) {
     if (active.editorRetry) return { retried: false };
     const { agent } = await context();
     await post('payload', { task_id: active.id, lease: active.lease, agent });
-    const page = await chrome.tabs.create({ url: 'about:blank', active: true });
+    const { studioWindowId: reopenWinId } = await chrome.storage.session.get('studioWindowId');
+    const reopenProps = { url: 'about:blank', active: true };
+    if (reopenWinId) {
+      try {
+        await chrome.windows.get(reopenWinId);
+        reopenProps.windowId = reopenWinId;
+      } catch (_) {}
+    }
+    const page = await chrome.tabs.create(reopenProps);
     await chrome.storage.session.set({
       active: { ...active, tabId: page.id, editorRetry: true },
       taskTabs: { [active.url]: page.id }

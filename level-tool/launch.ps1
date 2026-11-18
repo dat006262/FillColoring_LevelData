@@ -6,13 +6,49 @@ $ErrorActionPreference = 'Stop'
 $toolDir = $PSScriptRoot
 $url = 'http://127.0.0.1:8765'
 
+function Open-StudioBrowser($targetUrl) {
+    $browserExe = $null
+    try {
+        $progId = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\http\UserChoice' -ErrorAction SilentlyContinue).ProgId
+        if ($progId) {
+            $cmd = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$progId\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+            if ($cmd -match '"([^"]+\.exe)"') {
+                $candidate = $matches[1]
+                if (Test-Path -LiteralPath $candidate) { $browserExe = $candidate }
+            }
+        }
+    } catch { }
+
+    if (-not $browserExe) {
+        $candidates = @(
+            'C:\Program Files\Google\Chrome\Application\chrome.exe',
+            "$env:LOCALAPPDATA\CocCoc\Browser\Application\browser.exe",
+            'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+            'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+            'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+            "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
+            'C:\Program Files\CocCoc\Browser\Application\browser.exe'
+        )
+        foreach ($c in $candidates) {
+            if (Test-Path -LiteralPath $c) { $browserExe = $c; break }
+        }
+    }
+
+    if ($browserExe) {
+        # Using --new-window guarantees creating a new window on the CURRENT Virtual Desktop (e.g. Desktop 2)
+        # without jumping back to an existing window on Desktop 1.
+        Start-Process -FilePath $browserExe -ArgumentList @('--new-window', $targetUrl)
+    } else {
+        Start-Process $targetUrl
+    }
+}
 # If server is already running and healthy, simply open it in browser (unless -Restart requested)
 if (-not $Restart) {
     try {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 2
         if ($health -and $health.app -eq 'FillColoring Studio') {
             Write-Host "FillColoring Studio dang chay. Dang mo trinh duyet..." -ForegroundColor Green
-            Start-Process $url
+            Open-StudioBrowser $url
             exit 0
         }
     } catch { }
@@ -67,7 +103,7 @@ for ($i = 0; $i -lt 30; $i++) {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 1
         if ($health -and $health.app -eq 'FillColoring Studio') {
             Write-Host "Khoi dong thanh cong! Dang mo: $url" -ForegroundColor Green
-            Start-Process $url
+            Open-StudioBrowser $url
             exit 0
         }
     } catch { }
