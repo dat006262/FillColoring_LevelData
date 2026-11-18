@@ -53,6 +53,14 @@
     return answer;
   }
 
+  async function forceFocus() {
+    try {
+      window.focus();
+      await chrome.runtime.sendMessage({ type: 'force-focus', id: task?.id }).catch(() => {});
+    } catch (_) {}
+  }
+
+
   function check() {
     if (cancelled) throw new Error('Đã dừng tác vụ.');
   }
@@ -518,7 +526,11 @@
         const processing = isStyleProcessing();
         const noticeNow = hasStyleAppliedNotice();
         if (noticeNow) styleAppliedDetected = true;
-        const ready = (styleAppliedDetected || (elapsed >= 10 && !processing)) && !processing;
+        if (!processing && !styleAppliedDetected && elapsed >= 6 && elapsed <= 7.5) {
+          const rect = clickable.getBoundingClientRect();
+          clickAt(rect.left + rect.width / 2, rect.top + rect.height / 2);
+        }
+        const ready = (styleAppliedDetected || (elapsed >= 15 && !processing)) && !processing;
         if (ready) {
           if (stableSince === null) stableSince = Date.now();
           if (Date.now() - stableSince >= 1500) {
@@ -684,28 +696,34 @@
       throw new Error('Tab Canva đã xử lý tác vụ này trước đó.');
     }
 
-    heartbeat = setInterval(() => message('canva-progress', { message: phase }).catch(() => { cancelled = true; }), 2000);
+    await forceFocus();
+    heartbeat = setInterval(() => message('canva-progress', { message: phase }).catch(() => { /* Retry heartbeat; only explicit cancellation stops work. */ }), 2000);
     showStatus('Đang chuẩn bị trang Canva…');
     await sleep(2500);
 
     // 1. Xóa ảnh cũ (DEL)
     await clearOldImage();
+    await forceFocus();
     check();
 
     // 2. Kéo ảnh mới vào (duy nhất 1 ảnh)
     await uploadImage();
+    await forceFocus();
     check();
 
     // 3. Chuột phải / Menu "..." -> Đổi cỡ khung vẽ cho vừa với vùng chọn
     await resizeCanvasToFit();
+    await forceFocus();
     check();
 
     // 4. Click chọn ảnh -> Bấm "Chỉnh sửa" -> Hiện cửa sổ Sửa hình ảnh
     await openEditPanel();
+    await forceFocus();
     check();
 
     // 5 & 6. Nhấn "Nghệ thuật đường nét" -> Chờ tranh thực sự biến thành nét đen hoàn tất (KHÔNG tải sớm)
     await applyLineArtStyle();
+    await forceFocus();
     check();
 
     sessionStorage.setItem(marker, 'done');
@@ -736,6 +754,7 @@
       await sleep(1000);
     }
     if (!task) return;
+    await forceFocus();
     try {
       await run();
     } catch (error) {

@@ -47,6 +47,14 @@
     return answer;
   }
 
+  async function forceFocus() {
+    try {
+      window.focus();
+      await chrome.runtime.sendMessage({ type: 'force-focus', id: task?.id }).catch(() => {});
+    } catch (_) {}
+  }
+
+
   function check() {
     if (cancelled) throw new Error('Đã dừng tác vụ.');
   }
@@ -295,7 +303,8 @@
       font: '13px Segoe UI, sans-serif', maxWidth: '520px', pointerEvents: 'none'
     });
     document.body.append(banner);
-    heartbeat = setInterval(() => message('gemini-progress', { message: phase }).catch(() => { cancelled = true; }), 2000);
+    await forceFocus();
+    heartbeat = setInterval(() => message('gemini-progress', { message: phase }).catch(() => { /* Retry heartbeat; only explicit cancellation stops work. */ }), 2000);
     showStatus('Đang kiểm tra tài khoản Google…');
     await verifyAccount();
     await waitFor(editor, 40, 'Chưa thấy ô nhập Gemini. Hãy hoàn tất đăng nhập hoặc thông báo mở đầu trong tab.');
@@ -306,6 +315,7 @@
     const box = editor();
     if (!box) throw new Error('Không tìm thấy ô nhập prompt.');
     box.focus();
+    await forceFocus();
     // Clear any residual content before typing prompt
     document.execCommand('selectAll', false, null);
     document.execCommand('insertText', false, task.prompt);
@@ -320,6 +330,7 @@
     check();
     sessionStorage.setItem(marker, 'sent');
     submit.click();
+    await forceFocus();
     showStatus(task.stage === 'patch' ? 'Gemini đang vá nét…' : 'Gemini đang tô màu…');
     let stable = '', stableAt = 0, result = null;
     const deadline = Date.now() + 12 * 60 * 1000;
@@ -336,6 +347,7 @@
         if (stable !== src) { stable = src; stableAt = Date.now(); }
         if (Date.now() - stableAt > 4000) { result = candidate; break; }
       } else { stable = ''; stableAt = 0; }
+      try { window.focus(); } catch (_) {}
       await sleep(1000);
     }
     if (!result) throw new Error('Gemini chưa trả về ảnh sau 12 phút. Xem tab; không tự gửi lại prompt.');
@@ -362,6 +374,7 @@
       await sleep(1000);
     }
     if (!task) return;
+    await forceFocus();
     try {
       await run();
     } catch (error) {

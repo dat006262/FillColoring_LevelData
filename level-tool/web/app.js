@@ -112,7 +112,7 @@ function render() {
       el.style.opacity = isJobRunning ? '1' : '0.42';
     }
   });
-  if(job){$('job-status').textContent=job.message;$('job-status').className=job.status;}
+  if(job){$('job-status').textContent=jobMessage(p.id, job);$('job-status').className=job.status;}
   $('next-title').textContent = !origin && !source ? 'Bắt đầu bằng tạo tranh gốc hoặc tạo line' : !source ? 'Chuyển tranh sang nét vẽ trên Canva' : !patch ? 'Vá kín nét hở bằng Gemini' : !approved ? 'Kiểm tra nét rồi duyệt line' : !color ? 'Line đã duyệt — sẵn sàng tô màu' : !p.approved.color ? 'Kiểm tra ảnh màu trước khi xuất' : !line ? 'Xóa nền line để hoàn tất' : 'Bộ ảnh đã hoàn tất và sẵn sàng xuất';
   $('next-description').textContent = !approved ? 'Bước tô màu và xóa nền dùng đúng phiên bản line bạn chọn.' : 'Chạy 4 + 5 hoặc chạy riêng từng bước. Các phiên bản trước luôn được giữ lại.';
   $('export-status').hidden = !p.exported;
@@ -178,9 +178,28 @@ function paintOverlay(){
   lx.putImageData(pixels,0,0);ctx.drawImage(layer,0,0);
 }
 
+function jobMessage(pid, job) {
+  const iteration = localStorage.getItem('job-loop-' + pid);
+  const steps = {
+    origin: 'Bước 1 — Tạo tranh gốc (AI Studio)',
+    source: 'Bước 2 — Tạo line (Canva)',
+    patch: 'Bước 3 — Vá nét (Gemini)',
+    color: 'Bước 4 — Tô màu',
+    transparent: 'Bước 5 — Xóa nền',
+    all: 'Đang chuẩn bị quy trình', finish: 'Đang chuẩn bị hoàn thiện'
+  };
+  const step = steps[job.step] || job.step || 'Không có dữ liệu bước';
+  return (iteration ? `[Vòng lặp ${iteration}] ` : '') + `[${step}] ` + job.message;
+}
+
 async function act(path, extra={}) {
   if(mutation)return;
-  const pid=selected;mutation=true;render();
+  const pid=selected;
+  if (path === 'run') {
+    if (loopState.active) localStorage.setItem('job-loop-' + pid, `${loopState.current}/${loopState.total}`);
+    else localStorage.removeItem('job-loop-' + pid);
+  }
+  mutation=true;render();
   try{
     await api(path,{id:pid,...extra});
     if(path==='run'){
@@ -323,7 +342,7 @@ function updateLoopUI() {
   if (isLooping) {
     const p = current();
     const job = p ? state.jobs[p.id] : null;
-    const msg = job ? job.message : 'Đang chuẩn bị…';
+    const msg = job ? jobMessage(p.id, job) : 'Đang chuẩn bị…';
     $('job-status').hidden = false;
     $('job-status').textContent = `[Bộ ${loopState.current}/${loopState.total}] ${msg}`;
     $('job-status').className = 'running';
@@ -359,7 +378,8 @@ async function startLoop() {
     stopRequested: false,
     timer: null,
     prompt: prompt,
-    lastFinishedPid: null
+    lastFinishedPid: null,
+    isRecovering: false
   };
 
   updateLoopUI();
@@ -385,10 +405,11 @@ async function startLoop() {
 }
 
 function stopLoop(success=false) {
-  if (!loopState.active && !loopState.timer) return;
+  if (!loopState.active && !loopState.timer && !loopState.isRecovering) return;
   const wasActive = loopState.active;
   loopState.active = false;
   loopState.stopRequested = true;
+  loopState.isRecovering = false;
   if (loopState.timer) {
     clearTimeout(loopState.timer);
     loopState.timer = null;
@@ -400,18 +421,50 @@ function stopLoop(success=false) {
 }
 
 async function checkLoopProgress() {
-  if (!loopState.active || loopState.stopRequested) return;
+  if (!loopState.active || loopState.stopRequested || loopState.isRecovering || loopState.timer) return;
 
   const p = current();
   if (!p) return;
   const job = state.jobs[p.id];
   if (!job) return;
 
+  // Khi gặp lỗi hoặc bị dừng ở bất kỳ bước nào:
+  // Lấy số vòng lặp còn lại, tự động tạo mới bộ tranh và chạy lại từ Bước 1
   if (job.status === 'error' || job.status === 'cancelled') {
-    const stoppedAt = loopState.current;
+    if (loopState.stopRequested) return;
+
+    const currentIter = loopState.current;
     const total = loopState.total;
-    stopLoop(false);
-    toast(`Vòng lặp dừng lại do lỗi ở bộ ${stoppedAt}/${total}: ${job.message}`);
+    const remaining = total - currentIter + 1;
+
+    loopState.isRecovering = true;
+    toast(`⚠️ [Bộ ${currentIter}/${total}] bị dừng do lỗi ở bước: ${jobMessage(p.id, job)}. Tự động dọn dẹp, tạo tranh mới và chạy lại từ đầu sau 4 giây… (Còn lại ${remaining} bộ)`);
+
+    // Hủy bỏ tác vụ treo nếu có trên server/bridge
+    await api('cancel-browser', { id: p.id }).catch(() => {});
+
+    loopState.timer = setTimeout(async () => {
+      if (!loopState.active || loopState.stopRequested) {
+        loopState.isRecovering = false;
+        return;
+      }
+      try {
+        const ts = Date.now().toString().slice(-4);
+        const retryName = `${loopState.baseName}_${String(currentIter).padStart(2, '0')}_${ts}`;
+        toast(`🔄 [Bộ ${currentIter}/${total}] Đang tạo mới "${retryName}" và chạy lại từ đầu (Bước 1 → 5)…`);
+        const newProj = await api('create', { name: retryName, image: '', stage: 'origin' });
+        selected = newProj.id;
+        tab = 'origin';
+        localStorage.setItem('selected-project', selected);
+        await refresh(true);
+        await act('run', { action: 'all', prompt: loopState.prompt });
+      } catch (err) {
+        toast(`Lỗi khi tạo mới bộ ${currentIter}: ${err.message}. Sẽ thử lại sau 5 giây…`);
+      } finally {
+        loopState.isRecovering = false;
+        loopState.timer = null;
+      }
+    }, 4000);
     return;
   }
 
@@ -446,6 +499,8 @@ async function checkLoopProgress() {
       } catch (err) {
         toast(`Lỗi khi tạo bộ ${nextIter}: ${err.message}`);
         stopLoop(false);
+      } finally {
+        loopState.timer = null;
       }
     }, 3000);
   }

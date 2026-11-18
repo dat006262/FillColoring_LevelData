@@ -47,6 +47,9 @@ def gemini_url(value):
 
 
 class BrowserBridge:
+    # Allow several 30-second extension alarms while Studio is inactive.
+    CONNECTION_TIMEOUT = 90
+
     def __init__(self, timeout=900):
         self.lock = threading.RLock()
         self.timeout = timeout
@@ -56,7 +59,7 @@ class BrowserBridge:
 
     def status(self):
         with self.lock:
-            return {'connected': time.monotonic() - self.last_seen < 12,
+            return {'connected': self.agent is not None and time.monotonic() - self.last_seen < self.CONNECTION_TIMEOUT,
                     'pending': sum(not r['event'].is_set() for r in self.requests.values())}
 
     def poll(self, agent):
@@ -130,8 +133,6 @@ class BrowserBridge:
             png = b''
             url = origin_url(url)
         with self.lock:
-            if not self.status()['connected']:
-                raise BrowserError('Chưa kết nối tiện ích Chrome. Mở Studio trong Chrome đã cài tiện ích và giữ tab đó mở.')
             task_id = secrets.token_hex(12)
             request = {'payload': {'id': task_id, 'lease': secrets.token_urlsafe(24),
                                   'project_id': project_id, 'stage': stage,
@@ -142,7 +143,15 @@ class BrowserBridge:
                        'message': 'Đang chờ Chrome nhận ảnh…', 'result': None, 'error': None,
                        'page_url': None}
             self.requests[task_id] = request
-        deadline = time.monotonic() + self.timeout
+        # Canva finishes within 5 minutes; AI Studio may retry once after its 12-minute image timeout.
+        if 'canva.com' in url:
+            wait_timeout = min(300, self.timeout)
+        elif urlparse(url).netloc == 'aistudio.google.com':
+            wait_timeout = self.timeout * 2
+        else:
+            wait_timeout = self.timeout
+        deadline = time.monotonic() + wait_timeout
+        connection_deadline = time.monotonic() + min(120, self.timeout)
         task_start = time.time()
         downloads_dir = Path.home() / 'Downloads'
         try:
@@ -169,10 +178,12 @@ class BrowserBridge:
                     except Exception:
                         pass
                 if time.monotonic() >= deadline:
-                    raise BrowserError('Hết thời gian chờ phản hồi AI (15 phút). Xem tab trình duyệt; công cụ không tự gửi lại prompt.')
-                # Before claim it is safe to stop if the only bridge page was closed.
-                if not request['claimed'] and not self.status()['connected']:
-                    raise BrowserError('Mất kết nối Chrome trước khi gửi ảnh. Mở lại tab Studio rồi chạy lại.')
+                    raise BrowserError(f"Hết thời gian chờ phản hồi AI ({wait_timeout / 60:g} phút). Bước { {'origin': '1 — Tạo tranh gốc', 'source': '2 — Line Canva', 'patch': '3 — Vá nét', 'color': '4 — Tô màu'}.get(stage, stage) }. Tranh: {name}. Trạng thái cuối: {request['message']}.")
+                if not request['claimed']:
+                    if time.monotonic() >= connection_deadline:
+                        raise BrowserError('Không kết nối được Chrome sau 120 giây. Kiểm tra tiện ích và mở Chrome rồi thử lại.')
+                    if not self.status()['connected']:
+                        request['message'] = 'Đang chờ Chrome tự kết nối lại trước khi gửi ảnh...'
             if request['error']:
                 raise BrowserError(request['error'])
             if 'canva.com' in url:

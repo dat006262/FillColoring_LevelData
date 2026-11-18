@@ -72,10 +72,39 @@ class BridgeTests(unittest.TestCase):
         with self.assertRaises(BrowserError):
             self.bridge.payload(task['id'],task['lease'],AGENT)
 
-    def test_expired_connection_rejected(self):
-        self.bridge.last_seen = time.monotonic()-13
-        with self.assertRaises(BrowserError):
-            self.bridge.generate('p','patch','name','prompt',self.raw,'https://gemini.google.com/app','a@b.com',lambda _:None)
+    def test_disconnected_request_waits_and_recovers(self):
+        self.bridge.last_seen = time.monotonic()-100
+        thread = self.start()
+        try:
+            time.sleep(.6)
+            self.assertTrue(thread.is_alive())
+            self.assertFalse(self.errors)
+            task = self.bridge.poll(AGENT)
+            self.assertIsNotNone(task)
+            self.bridge.report(task['id'], task['lease'], AGENT,
+                              image=base64.b64encode(self.raw).decode())
+            thread.join(4)
+            self.assertEqual(self.results[0][0], self.raw)
+        finally:
+            self.bridge.cancel('project')
+            thread.join(4)
+
+    def test_background_alarm_gap_keeps_connection(self):
+        self.bridge.last_seen = time.monotonic() - 65
+        self.assertTrue(self.bridge.status()['connected'])
+        self.assertFalse(BrowserBridge().status()['connected'])
+
+    def test_reconnect_does_not_reissue_claimed_task(self):
+        thread = self.start()
+        try:
+            task = self.bridge.poll(AGENT)
+            self.bridge.last_seen = time.monotonic() - 100
+            self.assertFalse(self.bridge.status()['connected'])
+            self.assertIsNone(self.bridge.poll(AGENT))
+            self.assertEqual(self.bridge.payload(task['id'], task['lease'], AGENT)['id'], task['id'])
+        finally:
+            self.bridge.cancel('project')
+            thread.join(4)
 
     def test_wrong_site_and_browser_rejected(self):
         with self.assertRaises(BrowserError): self.bridge.poll('another-browser-0001')

@@ -90,6 +90,14 @@
     return answer;
   }
 
+  async function forceFocus() {
+    try {
+      window.focus();
+      await chrome.runtime.sendMessage({ type: 'force-focus', id: task?.id }).catch(() => {});
+    } catch (_) {}
+  }
+
+
   function check() {
     if (cancelled) throw new Error('Đã dừng tác vụ.');
   }
@@ -275,6 +283,51 @@
     });
   }
 
+  async function retryInternalError(marker, previousErrors = new Set()) {
+    check();
+    const internalError = querySelectorAllDeep('*').some(el =>
+      !previousErrors.has(el) && visible(el) && !el.closest('textarea, [contenteditable="true"], #fillcoloring-aistudio-status') &&
+      /^An internal error has occurred\.?$/i.test((el.innerText || el.textContent || '').trim()));
+    const retryKey = marker + '-internal-error-retry';
+    if (!internalError) return false;
+    if (sessionStorage.getItem(retryKey)) {
+      throw new Error('AI Studio báo An internal error has occurred. Đã thử lại 1 lần nhưng vẫn lỗi.');
+    }
+    showStatus('AI Studio gặp lỗi nội bộ. Đang tự chạy lại (1/1)...');
+    // Confirm the lease is still live before authorizing another submission.
+    const answer = await message('aistudio-ready');
+    check();
+    if (!answer?.task || answer.task.id !== task.id) return false;
+    sessionStorage.setItem(retryKey, '1');
+    sessionStorage.removeItem(marker);
+    if (heartbeat) clearInterval(heartbeat);
+    heartbeat = null;
+    location.replace(task.url);
+    return true;
+  }
+
+  async function dismissWelcomePopup() {
+    const welcomeDialog = () => querySelectorAllDeep('[role="dialog"], dialog, mat-dialog-container, .cdk-overlay-pane')
+      .find(el => visible(el) && /Welcome to AI Studio/i.test(el.innerText || el.textContent || ''));
+    const deadline = Date.now() + 10000;
+    showStatus('Đang chờ kiểm tra popup chào mừng AI Studio (10 giây)...');
+    while (Date.now() < deadline) {
+      check();
+      const dialog = welcomeDialog();
+      if (dialog) {
+        const button = querySelectorAllDeep('button, [role="button"]', dialog).find(el =>
+          visible(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true' &&
+          /^(Continue|Tiếp tục)$/i.test((el.innerText || el.textContent || '').trim()));
+        if (button) {
+          button.click();
+          await waitFor(() => !welcomeDialog(), 10, 'Popup chào mừng AI Studio chưa đóng. Hãy bấm Continue rồi chạy lại.');
+        }
+      }
+      await sleep(250);
+    }
+    if (welcomeDialog()) throw new Error('Không đóng được popup chào mừng AI Studio. Hãy bấm Continue rồi chạy lại.');
+  }
+
   async function run() {
     if (task.stage === 'origin') {
       // Respect the step-1 chat selected in settings, but never attach an image.
@@ -293,13 +346,24 @@
       font: '13px Segoe UI, sans-serif', maxWidth: '520px', pointerEvents: 'none'
     });
     document.body.append(banner);
+    await forceFocus();
 
-    heartbeat = setInterval(() => message('aistudio-progress', { message: phase }).catch(() => { cancelled = true; }), 2000);
+    heartbeat = setInterval(() => message('aistudio-progress', { message: phase }).catch(() => { /* Retry heartbeat; only explicit cancellation stops work. */ }), 2000);
 
     showStatus('Đang kiểm tra tài khoản Google…');
+    await dismissWelcomePopup();
     await verifyAccount();
 
-    await waitFor(editor, 40, 'Chưa thấy ô nhập AI Studio. Hãy hoàn tất đăng nhập trong tab.');
+    showStatus('Đang chờ ô nhập AI Studio, tối đa 120 giây...');
+    try {
+      await waitFor(editor, 120, 'Chưa thấy ô nhập AI Studio sau 120 giây.');
+    } catch (error) {
+      check();
+      showStatus('Ô nhập chưa sẵn sàng. Đang mở tab mới để thử lại bước hiện tại...');
+      const retry = await message('aistudio-reopen');
+      if (retry?.retried) return;
+      throw new Error('Đã mở lại AI Studio và chờ thêm 120 giây nhưng vẫn chưa thấy ô nhập. Kiểm tra đăng nhập trong tab AI Studio.');
+    }
 
     if (task.stage !== 'origin' && task.image) {
       showStatus('Đang tải ảnh vào AI Studio…');
@@ -312,6 +376,7 @@
     const box = editor();
     if (!box) throw new Error('Không tìm thấy ô nhập prompt.');
     box.focus();
+    await forceFocus();
 
     if (box.tagName === 'TEXTAREA' || box.tagName === 'INPUT') {
       box.value = task.prompt;
@@ -332,6 +397,8 @@
 
     // Ghi lại toàn bộ ảnh và lượt chat ĐANG CÓ TRƯỚC KHI BẤM RUN
     // Tuyệt đối không lấy nhầm ảnh của các lượt tạo trước đó
+    const previousErrors = new Set(querySelectorAllDeep('*').filter(el =>
+      /^An internal error has occurred\.?$/i.test((el.innerText || el.textContent || '').trim())));
     const beforeRunElements = new Set(querySelectorAllDeep('img'));
     const beforeRunSrcs = new Set(querySelectorAllDeep('img').map(img => img.currentSrc || img.src).filter(Boolean));
     const beforeModelTurns = new Set(querySelectorAllDeep('ms-chat-turn, ms-model-turn, .model-turn, [data-role="model"], [data-turn-role="model"], ms-chunk-renderer'));
@@ -348,6 +415,7 @@
     }
     sessionStorage.setItem(marker, 'sent');
     runBtn.click();
+    await forceFocus();
 
     showStatus('Đã nhấn Run. Đang chờ AI Studio khởi động xử lý…');
 
@@ -356,6 +424,7 @@
     const startDeadline = Date.now() + 15000;
     while (Date.now() < startDeadline) {
       check();
+      if (await retryInternalError(marker, previousErrors)) return;
       if (isGeneratingStatus()) {
         generationStarted = true;
         break;
@@ -372,6 +441,7 @@
 
     while (Date.now() < deadline) {
       check();
+      if (await retryInternalError(marker, previousErrors)) return;
       const generating = isGeneratingStatus();
       const elapsedSec = Math.floor((Date.now() - genStartTime) / 1000);
 
@@ -380,7 +450,11 @@
         showStatus(`AI Studio đang tạo ảnh… (${elapsedSec}s)`);
         stable = '';
         stableAt = 0;
-      } else {
+      }
+      if (elapsedSec % 4 === 0) {
+        try { window.focus(); } catch (_) {}
+      }
+      if (!generating) {
         // AI Studio đã dừng tạo ảnh (không còn nút Stop, không còn spinner)
         if (generationStarted || elapsedSec >= 6) {
           showStatus(`AI Studio đã xử lý xong (${elapsedSec}s). Đang kiểm tra ảnh mới…`);
@@ -407,6 +481,7 @@
       await sleep(1000);
     }
 
+    if (!result && await retryInternalError(marker, previousErrors)) return;
     if (!result) throw new Error('AI Studio chưa trả về ảnh sau 12 phút. Xem tab AI Studio.');
 
     showStatus('Đang đưa ảnh kết quả về Studio…');
@@ -456,6 +531,7 @@
       await sleep(1000);
     }
     if (!task) return;
+    await forceFocus();
     try {
       await run();
     } catch (error) {
