@@ -3,7 +3,7 @@
   if (location.origin !== 'http://127.0.0.1:8765') return;
   const token = document.querySelector('meta[name="app-token"]')?.content;
   if (!token) return;
-  const beat = () => chrome.runtime.sendMessage({type:'studio-heartbeat', token, isStudioTab: true}).catch(() => {});
+  const beat = () => chrome.runtime.sendMessage({type:'studio-heartbeat', token}).catch(() => {});
   beat();
   setInterval(beat, 2000);
 })();

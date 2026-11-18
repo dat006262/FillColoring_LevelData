@@ -113,36 +113,11 @@ async function openTaskTab(task) {
   return page;
 }
 
-function getBrowserType() {
-  const ua = (navigator.userAgent || '').toLowerCase();
-  if (ua.includes('coccoc')) return 'coccoc';
-  if (ua.includes('edg')) return 'edge';
-  return 'chrome';
-}
-
-async function hasActiveStudioTab() {
-  const { lastStudioTab, active } = await chrome.storage.session.get(['lastStudioTab', 'active']);
-  if (active) return true;
-  if (lastStudioTab && Date.now() - lastStudioTab < 30000) return true;
-  try {
-    const tabs = await chrome.tabs.query({ url: SERVER + '/*' });
-    if (tabs && tabs.length > 0) return true;
-  } catch (_) {}
-  return false;
-}
 async function tick() {
   if (polling) return;
   polling = true;
   try {
-    const isStudioOpenHere = await hasActiveStudioTab();
-    const { active } = await context();
-
-    // Nếu không có tác vụ đang chạy VÀ không mở tab Studio ở trình duyệt này:
-    // Tuyệt đối không poll nhận tác vụ để tránh việc trình duyệt chạy nền (như Chrome)
-    // cướp mất tác vụ của trình duyệt người dùng đang mở làm việc (như Cốc Cốc).
-    if (!active && !isStudioOpenHere) return;
-
-    const { agent, connection } = await context();
+    const { agent, connection, active } = await context();
     if (!connection) await reconnect();
     // Never claim a new task while holding an old active snapshot: the server
     // hands out each lease only once, so discarding that response stalls it.
@@ -170,8 +145,7 @@ async function tick() {
         return;
       }
     }
-    const browserType = getBrowserType();
-    const { task } = await post('poll', { agent, browser: browserType, has_studio: isStudioOpenHere });
+    const { task } = await post('poll', { agent });
     if (!task) return;
     const url = new URL(task.url);
     const isGemini = url.origin === 'https://gemini.google.com' && /^\/(?:u\/\d+\/)?app$/.test(url.pathname);
@@ -225,10 +199,6 @@ async function dispatch(msg, sender) {
   const origin = new URL(sender.url || sender.tab.url).origin;
   if (msg.type === 'studio-heartbeat') {
     if (origin !== SERVER || typeof msg.token !== 'string' || msg.token.length < 20) throw new Error('Kết nối không hợp lệ.');
-    await chrome.storage.session.set({
-      connection: { token: msg.token },
-      lastStudioTab: Date.now()
-    });
     // Do not overwrite a refreshed token with one from an old Studio tab.
     if (!(await context()).connection) await reconnect();
     await tick();
