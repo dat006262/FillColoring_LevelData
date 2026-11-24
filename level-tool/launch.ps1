@@ -42,17 +42,33 @@ function Open-StudioBrowser($targetUrl) {
         Start-Process $targetUrl
     }
 }
-# If server is already running and healthy at v1.0.1, simply open it in browser (unless -Restart requested)
+function Get-ServerRevision($dir) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $ms = New-Object System.IO.MemoryStream
+    foreach ($name in @('server.py', 'core.py', 'browser_bridge.py', 'catalog.py', 'level_creator.py')) {
+        $p = Join-Path $dir $name
+        if (Test-Path -LiteralPath $p) {
+            $b = [System.IO.File]::ReadAllBytes($p)
+            $ms.Write($b, 0, $b.Length)
+        }
+    }
+    $hash = $sha.ComputeHash($ms.ToArray())
+    return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+}
+
+$expectedRevision = Get-ServerRevision $toolDir
+
+# If server is already running and matches current code revision, simply open it in browser (unless -Restart requested)
 if (-not $Restart) {
     try {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 2
         if ($health -and $health.app -eq 'FillColoring Studio') {
-            if ($health.app_version -eq '1.0.1') {
+            if ($health.app_version -eq '1.0.1' -and $health.revision -eq $expectedRevision) {
                 Write-Host "FillColoring Studio v1.0.1 dang chay. Dang mo trinh duyet..." -ForegroundColor Green
                 Open-StudioBrowser $url
                 exit 0
             }
-            Write-Host "Phat hien phien ban cu, dang khoi dong lai len v1.0.1..." -ForegroundColor Yellow
+            Write-Host "Phat hien server phien ban cu, dang khoi dong lai..." -ForegroundColor Yellow
             $Restart = $true
         }
     } catch { }
