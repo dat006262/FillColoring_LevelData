@@ -3,6 +3,7 @@
   const $ = id => document.getElementById(id);
   const token = document.querySelector('meta[name="app-token"]')?.content || '';
   const PRICE_LABELS = { 0: 'Free', 1: 'Diamond', 2: 'Gold' };
+  const DEFAULT_SUPPORTED_LANGUAGES = ['EN', 'VN', 'CN_s', 'CN_t', 'FR', 'DE', 'ID', 'JP', 'KR', 'PT_BR', 'RU', 'ES_ES'];
 
   let catState = null;
   let activeView = localStorage.getItem('studio-view-mode') || 'studio';
@@ -23,6 +24,7 @@
   const expandedSections = new Set([0]);
   const expandedAlbums = new Set(['0:0']);
   const expandedExplorePics = new Set();
+  const expandedTranslations = new Set();
 
   function showToast(msg) {
     const t = $('toast');
@@ -882,7 +884,7 @@
     const row1 = el('div', 'cat-toolbar-grid');
     row1.append(
       btn('+ Add Section', 'cat-btn cat-btn-push', async () => {
-        sections.push({ name: `Section ${sections.length + 1}`, iconName: '', albums: [] });
+        sections.push({ name: `Section ${sections.length + 1}`, nameTranslations: [], iconName: '', albums: [] });
         expandedSections.add(sections.length - 1);
         await saveExplore();
       }),
@@ -931,6 +933,77 @@
     renderExploreSectionsOnly();
   }
 
+  function renderTranslationDrawer({ entries, setEntries, label, multiline = false, fallbackText = '', expandKey }) {
+    const langs = catState?.supportedLanguages || DEFAULT_SUPPORTED_LANGUAGES;
+    const list = Array.isArray(entries) ? entries : [];
+    const filled = list.filter(e => e && String(e.text || '').trim().length > 0).length;
+    const isOpen = expandedTranslations.has(expandKey);
+
+    const box = el('div', 'cat-trans-box');
+    const head = el('div', 'cat-trans-head');
+    const fold = el('button', 'cat-foldout cat-trans-fold', `${isOpen ? '▼' : '▶'} 🌐 ${label} (${filled}/${langs.length})`);
+    fold.type = 'button';
+    fold.onclick = () => {
+      if (isOpen) expandedTranslations.delete(expandKey);
+      else expandedTranslations.add(expandKey);
+      renderExploreSectionsOnly();
+    };
+    const initBtn = btn('Init 12 Langs', 'cat-btn cat-btn-mini', () => {
+      const next = [...list];
+      for (const lang of langs) {
+        const exists = next.some(r => r && String(r.lang || '').trim().toLowerCase() === lang.toLowerCase());
+        if (!exists) {
+          next.push({ lang, text: lang === 'EN' ? String(fallbackText || '') : '' });
+        }
+      }
+      setEntries(next);
+      expandedTranslations.add(expandKey);
+      saveExplore();
+    });
+    head.append(fold, initBtn);
+    box.append(head);
+
+    if (!isOpen) return box;
+
+    const body = el('div', 'cat-trans-body');
+    if (list.length === 0) {
+      body.append(el('p', 'cat-meta-note', "Chưa có bản dịch riêng. Sẽ dùng text mặc định phía trên. Nhấn 'Init 12 Langs' để nhập bản dịch đi kèm catalog."));
+    } else {
+      list.forEach((row, idx) => {
+        const rWrap = el('div', 'cat-trans-row');
+        const langInp = document.createElement('input');
+        langInp.type = 'text';
+        langInp.className = 'cat-trans-lang';
+        langInp.value = row.lang || '';
+        langInp.placeholder = 'EN';
+        langInp.onchange = () => { row.lang = langInp.value.trim(); saveExplore(); };
+
+        const textInp = multiline ? document.createElement('textarea') : document.createElement('input');
+        if (multiline) textInp.rows = 2;
+        else textInp.type = 'text';
+        textInp.className = 'cat-trans-text';
+        textInp.value = row.text || '';
+        textInp.onchange = () => { row.text = textInp.value; saveExplore(); };
+
+        const delBtn = btn('×', 'cat-btn cat-btn-mini danger', () => {
+          list.splice(idx, 1);
+          setEntries(list);
+          saveExplore();
+        });
+        rWrap.append(langInp, textInp, delBtn);
+        body.append(rWrap);
+      });
+    }
+    body.append(btn('+ Add Language Row', 'cat-btn cat-btn-mini', () => {
+      const next = [...list, { lang: 'EN', text: '' }];
+      setEntries(next);
+      expandedTranslations.add(expandKey);
+      saveExplore();
+    }));
+    box.append(body);
+    return box;
+  }
+
   function renderExploreSectionsOnly() {
     const wrap = $('cat-explore-list');
     if (!wrap || !catState) return;
@@ -955,7 +1028,11 @@
       secRight.append(
         btn('+ Add Album', 'cat-btn cat-btn-mini', async () => {
           sec.albums = sec.albums || [];
-          sec.albums.push({ name: `Album ${sec.albums.length + 1}`, description: '', coverPictureId: '', pictures: [] });
+          sec.albums.push({
+            name: `Album ${sec.albums.length + 1}`, nameTranslations: [],
+            description: '', descriptionTranslations: [],
+            coverPictureId: '', pictures: [],
+          });
           expandedSections.add(si);
           expandedAlbums.add(`${si}:${sec.albums.length - 1}`);
           await saveExplore();
@@ -979,8 +1056,19 @@
         sIcon.value = sec.iconName || '';
         sIcon.placeholder = 'Tên icon sprite (tùy chọn)';
         sIcon.onchange = () => { sec.iconName = sIcon.value; saveExplore(); };
-        secFields.append(el('label', 'cat-detail-label', 'Section Name'), sName, el('label', 'cat-detail-label', 'Icon Name'), sIcon);
+        secFields.append(el('label', 'cat-detail-label', 'Section Name'), sName);
         secBody.append(secFields);
+        secBody.append(renderTranslationDrawer({
+          entries: sec.nameTranslations,
+          setEntries: next => { sec.nameTranslations = next; },
+          label: 'Section Name Translations',
+          multiline: false,
+          fallbackText: sec.name || '',
+          expandKey: `sec:${si}:name`,
+        }));
+        const secIconGrid = el('div', 'cat-detail-grid');
+        secIconGrid.append(el('label', 'cat-detail-label', 'Icon Name'), sIcon);
+        secBody.append(secIconGrid);
 
         (sec.albums || []).forEach((alb, ai) => {
           const albKey = `${si}:${ai}`;
@@ -1013,11 +1101,37 @@
 
           if (albOpen) {
             const albBody = el('div', 'cat-alb-body');
-            const albGrid = el('div', 'cat-detail-grid');
+            const albNameGrid = el('div', 'cat-detail-grid');
             const aName = document.createElement('input'); aName.value = alb.name || '';
             aName.onchange = () => { alb.name = aName.value; saveExplore(); };
+            albNameGrid.append(el('label', 'cat-detail-label', 'Album Name'), aName);
+            albBody.append(albNameGrid);
+
+            albBody.append(renderTranslationDrawer({
+              entries: alb.nameTranslations,
+              setEntries: next => { alb.nameTranslations = next; },
+              label: 'Album Name Translations',
+              multiline: false,
+              fallbackText: alb.name || '',
+              expandKey: `alb:${albKey}:name`,
+            }));
+
+            const albDescGrid = el('div', 'cat-detail-grid');
             const aDesc = document.createElement('textarea'); aDesc.rows = 2; aDesc.value = alb.description || '';
             aDesc.onchange = () => { alb.description = aDesc.value; saveExplore(); };
+            albDescGrid.append(el('label', 'cat-detail-label', 'Description'), aDesc);
+            albBody.append(albDescGrid);
+
+            albBody.append(renderTranslationDrawer({
+              entries: alb.descriptionTranslations,
+              setEntries: next => { alb.descriptionTranslations = next; },
+              label: 'Description Translations',
+              multiline: true,
+              fallbackText: alb.description || '',
+              expandKey: `alb:${albKey}:desc`,
+            }));
+
+            const albCovGrid = el('div', 'cat-detail-grid');
             const covRow = el('div', 'cat-dim-row');
             const aCov = document.createElement('input'); aCov.value = alb.coverPictureId || '';
             aCov.placeholder = 'Cover Picture ID';
@@ -1026,12 +1140,8 @@
               const first = (alb.pictures || [])[0];
               if (first?.id) { alb.coverPictureId = first.id; saveExplore(); }
             }));
-            albGrid.append(
-              el('label', 'cat-detail-label', 'Album Name'), aName,
-              el('label', 'cat-detail-label', 'Description'), aDesc,
-              el('label', 'cat-detail-label', 'Cover Picture ID'), covRow
-            );
-            albBody.append(albGrid);
+            albCovGrid.append(el('label', 'cat-detail-label', 'Cover Picture ID'), covRow);
+            albBody.append(albCovGrid);
 
             const q = exploreSearch.trim().toLowerCase();
             (alb.pictures || []).forEach((pic, pi) => {

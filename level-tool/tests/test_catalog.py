@@ -138,12 +138,20 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(daily_state['entries'][0]['picture']['priceType'], 0)
         self.assertEqual(daily_state['entries'][0]['picture']['price'], 0)
 
-        # Explore section + link_textures
+        # Explore section with translations + link_textures
         self.catalog.save_explore({
             'sections': [{
-                'name': 'Featured',
-                'iconName': '',
-                'albums': [{'name': 'Animals', 'description': 'Desc', 'coverPictureId': '', 'pictures': [{'id': 'animal_99_bytes'}]}],
+                'name': 'Chủ đề nổi bật',
+                'nameTranslations': [{'lang': 'EN', 'text': 'Featured Themes'}, {'lang': 'VN', 'text': 'Chủ đề nổi bật'}],
+                'iconName': 'featured_icon',
+                'albums': [{
+                    'name': 'Động vật',
+                    'nameTranslations': [{'lang': 'EN', 'text': 'Animals'}],
+                    'description': 'Mô tả',
+                    'descriptionTranslations': [{'lang': 'EN', 'text': 'Cute animals'}],
+                    'coverPictureId': '',
+                    'pictures': [{'id': 'animal_99_bytes'}],
+                }],
             }]
         })
         self.catalog.link_textures()
@@ -161,6 +169,12 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue((sd / 'explore.json').is_file())
         self.assertTrue((sd / 'pictures' / 'animal_99_bytes' / 'r1' / 'regions.bytes').is_file())
 
+        # Verify catalog.json bundles explore with translations
+        cat_json = json.loads((sd / 'catalog.json').read_text(encoding='utf-8'))
+        self.assertTrue(cat_json['explore']['hasData'])
+        self.assertEqual(cat_json['explore']['sections'][0]['nameTranslations'][0]['text'], 'Featured Themes')
+        self.assertEqual(cat_json['explore']['sections'][0]['albums'][0]['descriptionTranslations'][0]['text'], 'Cute animals')
+
         # Fresh CatalogStore pulls from ServerData/Pictures cleanly
         fresh_data = self.root / 'fresh_data'
         fresh = CatalogStore(fresh_data, output_dir=self.output_dir, fillcoloring_root=self.fc_root)
@@ -172,6 +186,15 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue(f_state['library'][0]['hasFileByte'])
         self.assertEqual(len(f_state['daily']['entries']), 1)
         self.assertEqual(len(f_state['explore']['sections']), 1)
+        self.assertEqual(f_state['explore']['sections'][0]['nameTranslations'][0]['text'], 'Featured Themes')
+        self.assertEqual(f_state['explore']['sections'][0]['albums'][0]['nameTranslations'][0]['text'], 'Animals')
+
+        # Also verify pulling Explore falls back to catalog.json['explore'] when explore.json is missing
+        (sd / 'explore.json').unlink()
+        fallback_store = CatalogStore(self.root / 'fallback_data', output_dir=self.output_dir, fillcoloring_root=self.fc_root)
+        fb_res = fallback_store.pull_data(pull_library=False, pull_daily=False, pull_explore=True, source='local')
+        self.assertIn('explore:catalog-explore', fb_res['sources'])
+        self.assertEqual(fb_res['state']['explore']['sections'][0]['albums'][0]['descriptionTranslations'][0]['text'], 'Cute animals')
 
     def test_http_catalog_endpoints_and_csrf(self):
         (self.output_dir / 'sun_colored_final.png').write_bytes(make_colored_png((300, 300)))

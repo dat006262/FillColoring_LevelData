@@ -28,6 +28,60 @@ DEFAULT_FIREBASE_PROJECT = 'coloruniverse-baa07'
 DEFAULT_FILLCOLORING_ROOT = Path(r'F:\noichuagit\FillColoring')
 ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,128}$')
 PRICE_TYPE_NAMES = {0: 'Free', 1: 'Diamond', 2: 'Gold'}
+SUPPORTED_LANGUAGES = ('EN', 'VN', 'CN_s', 'CN_t', 'FR', 'DE', 'ID', 'JP', 'KR', 'PT_BR', 'RU', 'ES_ES')
+
+
+def _normalize_translations(entries: Any) -> list[dict[str, str]]:
+    if not isinstance(entries, list):
+        return []
+    result = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        lang = str(item.get('lang') or '').strip()
+        text = str(item.get('text') or '')
+        if lang or text:
+            result.append({'lang': lang, 'text': text})
+    return result
+
+
+def _build_explore_dto(explore_data: dict[str, Any] | None) -> dict[str, Any]:
+    sections_out = []
+    for s in (explore_data or {}).get('sections', []):
+        if not isinstance(s, dict):
+            continue
+        albums_out = []
+        for a in s.get('albums', []):
+            if not isinstance(a, dict):
+                continue
+            pics = a.get('pictures', [])
+            cover_id = str(a.get('coverPictureId') or (pics[0].get('id', '') if pics else ''))
+            albums_out.append({
+                'name': str(a.get('name') or ''),
+                'nameTranslations': _normalize_translations(a.get('nameTranslations')),
+                'description': str(a.get('description') or ''),
+                'descriptionTranslations': _normalize_translations(a.get('descriptionTranslations')),
+                'coverPictureId': cover_id,
+                'pictures': [
+                    {
+                        'pictureId': str(p.get('id') or p.get('pictureId') or ''),
+                        'name': str(p.get('name') or ''),
+                        'width': int(p.get('cachedTextureWidth', p.get('width', 0)) or 0),
+                        'height': int(p.get('cachedTextureHeight', p.get('height', 0)) or 0),
+                        'tags': _normalize_tags(p.get('tags', [])),
+                        'priceType': int(p.get('priceType', 0) or 0),
+                        'price': max(0, int(p.get('price', 0) or 0)),
+                    }
+                    for p in pics if isinstance(p, dict)
+                ],
+            })
+        sections_out.append({
+            'name': str(s.get('name') or ''),
+            'nameTranslations': _normalize_translations(s.get('nameTranslations')),
+            'iconName': str(s.get('iconName') or ''),
+            'albums': albums_out,
+        })
+    return {'hasData': len(sections_out) > 0, 'sections': sections_out}
 
 
 def sanitize_picture_id(raw: str, ensure_bytes_suffix: bool = True) -> str:
@@ -477,12 +531,15 @@ class CatalogStore:
                     pics = [self._hydrate_picture(p) for p in a.get('pictures', [])]
                     albums.append({
                         'name': str(a.get('name') or ''),
+                        'nameTranslations': _normalize_translations(a.get('nameTranslations')),
                         'description': str(a.get('description') or ''),
+                        'descriptionTranslations': _normalize_translations(a.get('descriptionTranslations')),
                         'coverPictureId': str(a.get('coverPictureId') or (pics[0]['id'] if pics else '')),
                         'pictures': pics,
                     })
                 sections.append({
                     'name': str(s.get('name') or ''),
+                    'nameTranslations': _normalize_translations(s.get('nameTranslations')),
                     'iconName': str(s.get('iconName') or ''),
                     'albums': albums,
                 })
@@ -494,7 +551,8 @@ class CatalogStore:
                 'settings': self.settings(),
                 'library': lib,
                 'daily': {'defaultPicture': default_pic, 'entries': entries},
-                'explore': {'sections': sections},
+                'explore': {'hasData': len(sections) > 0, 'sections': sections},
+                'supportedLanguages': list(SUPPORTED_LANGUAGES),
                 'summary': self._collect_summary(),
                 'outputSources': self.scan_output_sources(),
             }
@@ -593,16 +651,19 @@ class CatalogStore:
                         pics.append(np)
                     albums.append({
                         'name': str(a.get('name') or ''),
+                        'nameTranslations': _normalize_translations(a.get('nameTranslations')),
                         'description': str(a.get('description') or ''),
+                        'descriptionTranslations': _normalize_translations(a.get('descriptionTranslations')),
                         'coverPictureId': str(a.get('coverPictureId') or (pics[0]['id'] if pics else '')),
                         'pictures': pics,
                     })
                 sections.append({
                     'name': str(s.get('name') or ''),
+                    'nameTranslations': _normalize_translations(s.get('nameTranslations')),
                     'iconName': str(s.get('iconName') or ''),
                     'albums': albums,
                 })
-            self.working['explore'] = {'sections': sections}
+            self.working['explore'] = {'hasData': len(sections) > 0, 'sections': sections}
             self._save_working()
             return self.state()
 
@@ -849,11 +910,15 @@ class CatalogStore:
             elif target == 'explore':
                 sections = self.working.setdefault('explore', {}).setdefault('sections', [])
                 if not sections:
-                    sections.append({'name': 'Section 1', 'iconName': '', 'albums': []})
+                    sections.append({'name': 'Section 1', 'nameTranslations': [], 'iconName': '', 'albums': []})
                 sec = sections[max(0, min(section_index, len(sections) - 1))]
                 albums = sec.setdefault('albums', [])
                 if not albums:
-                    albums.append({'name': 'Album 1', 'description': '', 'coverPictureId': final_id, 'pictures': []})
+                    albums.append({
+                        'name': 'Album 1', 'nameTranslations': [],
+                        'description': '', 'descriptionTranslations': [],
+                        'coverPictureId': final_id, 'pictures': [],
+                    })
                 alb = albums[max(0, min(album_index, len(albums) - 1))]
                 alb.setdefault('pictures', []).append(new_pic)
                 if not alb.get('coverPictureId'):
@@ -913,9 +978,11 @@ class CatalogStore:
             raise WorkflowError('Nguồn Pull không hợp lệ.')
         with self.lock:
             pulled_sources = []
+            catalog_cache = None
 
             if pull_library:
                 catalog, src_used = self._load_json_source('catalog.json', source)
+                catalog_cache = catalog
                 pulled_sources.append(f'catalog:{src_used}')
                 pictures = []
                 for entry in (catalog or {}).get('pictures', []):
@@ -962,7 +1029,20 @@ class CatalogStore:
                     }
 
             if pull_explore:
-                explore_json, src_used = self._load_json_source('explore.json', source)
+                try:
+                    explore_json, src_used = self._load_json_source('explore.json', source)
+                except WorkflowError:
+                    explore_json, src_used = None, 'missing'
+                if not explore_json or not explore_json.get('sections'):
+                    if catalog_cache is None:
+                        try:
+                            catalog_cache, _ = self._load_json_source('catalog.json', source)
+                        except WorkflowError:
+                            catalog_cache = None
+                    cat_explore = (catalog_cache or {}).get('explore')
+                    if cat_explore and (cat_explore.get('hasData') or cat_explore.get('sections')):
+                        explore_json = cat_explore
+                        src_used = f'catalog-explore'
                 if explore_json:
                     pulled_sources.append(f'explore:{src_used}')
                     sections = []
@@ -972,16 +1052,19 @@ class CatalogStore:
                             pics = [_normalize_picture(p) for p in a.get('pictures', [])]
                             albums.append({
                                 'name': str(a.get('name') or ''),
+                                'nameTranslations': _normalize_translations(a.get('nameTranslations')),
                                 'description': str(a.get('description') or ''),
+                                'descriptionTranslations': _normalize_translations(a.get('descriptionTranslations')),
                                 'coverPictureId': str(a.get('coverPictureId') or (pics[0]['id'] if pics else '')),
                                 'pictures': pics,
                             })
                         sections.append({
                             'name': str(s.get('name') or ''),
+                            'nameTranslations': _normalize_translations(s.get('nameTranslations')),
                             'iconName': str(s.get('iconName') or ''),
                             'albums': albums,
                         })
-                    self.working['explore'] = {'sections': sections}
+                    self.working['explore'] = {'hasData': len(sections) > 0, 'sections': sections}
 
             self.working['pulled_at'] = now()
             self._save_working()
@@ -1085,23 +1168,37 @@ class CatalogStore:
                 exported_entries.append(entry)
 
             # Preserve existing inLibrary=False entries if doing a partial push without Daily/Explore loaded
-            if (not push_daily or not push_explore) and (sd / 'catalog.json').is_file():
+            prev_cat = None
+            if (sd / 'catalog.json').is_file():
                 try:
                     prev_cat = json.loads((sd / 'catalog.json').read_text(encoding='utf-8'))
-                    exported_ids = {e['id'].lower() for e in exported_entries}
-                    for prev in prev_cat.get('pictures', []):
-                        prev_id = str(prev.get('id') or '').lower()
-                        if prev_id and not prev.get('inLibrary', True) and prev_id not in exported_ids:
-                            exported_entries.append(prev)
-                            exported_ids.add(prev_id)
                 except (OSError, ValueError):
-                    pass
+                    prev_cat = None
 
-            # Write catalog.json
+            if (not push_daily or not push_explore) and prev_cat:
+                exported_ids = {e['id'].lower() for e in exported_entries}
+                for prev in prev_cat.get('pictures', []):
+                    prev_id = str(prev.get('id') or '').lower()
+                    if prev_id and not prev.get('inLibrary', True) and prev_id not in exported_ids:
+                        exported_entries.append(prev)
+                        exported_ids.add(prev_id)
+
+            explore_out = _build_explore_dto(self.working.get('explore'))
+            if not push_explore and not explore_out['sections']:
+                if (sd / 'explore.json').is_file():
+                    try:
+                        explore_out = _build_explore_dto(json.loads((sd / 'explore.json').read_text(encoding='utf-8')))
+                    except (OSError, ValueError):
+                        pass
+                elif prev_cat and isinstance(prev_cat.get('explore'), dict):
+                    explore_out = _build_explore_dto(prev_cat['explore'])
+
+            # Write catalog.json (bundling explore metadata & translations)
             catalog_payload = {
                 'schemaVersion': 1,
                 'revision': datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'),
                 'pictures': exported_entries,
+                'explore': explore_out,
             }
             atomic_json(sd / 'catalog.json', catalog_payload)
 
@@ -1130,34 +1227,6 @@ class CatalogStore:
                 atomic_json(sd / 'daily.json', daily_out)
 
             if push_explore:
-                explore_out = {'sections': []}
-                for s in (self.working.get('explore') or {}).get('sections', []):
-                    sec_dto = {
-                        'name': str(s.get('name') or ''),
-                        'iconName': str(s.get('iconName') or ''),
-                        'albums': [],
-                    }
-                    for a in s.get('albums', []):
-                        pics = a.get('pictures', [])
-                        cover_id = str(a.get('coverPictureId') or (pics[0].get('id', '') if pics else ''))
-                        sec_dto['albums'].append({
-                            'name': str(a.get('name') or ''),
-                            'description': str(a.get('description') or ''),
-                            'coverPictureId': cover_id,
-                            'pictures': [
-                                {
-                                    'pictureId': str(p.get('id') or ''),
-                                    'name': str(p.get('name') or ''),
-                                    'width': int(p.get('cachedTextureWidth', 0) or 0),
-                                    'height': int(p.get('cachedTextureHeight', 0) or 0),
-                                    'tags': _normalize_tags(p.get('tags', [])),
-                                    'priceType': int(p.get('priceType', 0) or 0),
-                                    'price': max(0, int(p.get('price', 0) or 0)),
-                                }
-                                for p in pics
-                            ],
-                        })
-                    explore_out['sections'].append(sec_dto)
                 atomic_json(sd / 'explore.json', explore_out)
 
             return {

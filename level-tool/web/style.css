@@ -117,6 +117,14 @@
 .cat-shell .notice{background:#2c3340;border-color:#445269;color:#dbeafe;margin:6px 0}
 .cat-shell .notice.error{background:#4a282a;border-color:#7c3a3e;color:#fecaca}
 
+.cat-trans-box{background:#2c2e34;border:1px solid #484b54;border-radius:6px;padding:7px 10px;margin:6px 0 8px}
+.cat-trans-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cat-trans-fold{font-size:12px;color:#cbd5e1}
+.cat-trans-body{margin-top:8px;display:flex;flex-direction:column;gap:6px}
+.cat-trans-row{display:flex;align-items:flex-start;gap:6px}
+.cat-trans-lang{width:76px;flex:0 0 76px;background:#202126;color:#93c5fd;border:1px solid #52555f;padding:5px 7px;font-size:12px;font-weight:700;border-radius:5px}
+.cat-trans-text{flex:1;background:#202126;color:#f3f4f6;border:1px solid #52555f;padding:5px 8px;font-size:12px;border-radius:5px;min-width:0}
+
 @media(max-width:800px){
   .cat-global-actions,.cat-main-tabs,.cat-import-options,.cat-field-row,.cat-detail-grid{grid-template-columns:1fr}
 }
