@@ -574,7 +574,14 @@
           renderCatalog();
           showToast('Đã cache kích thước từ ColoredTexture cho toàn bộ tranh.');
         } catch (e) { showToast(e.message); }
-      })
+      }),
+      btn('🗑️ Remove All', 'cat-btn cat-btn-clear', async () => {
+        if (!confirm(`Xóa TẤT CẢ ${pics.length} tranh trong Picture Library?`)) return;
+        catState.library = [];
+        expandedLib.clear();
+        await saveLibrary();
+        showToast('Đã xóa toàn bộ tranh trong Picture Library.');
+      }, pics.length === 0)
     );
     bar.append(toolBtns);
     host.append(bar);
@@ -723,7 +730,14 @@
           renderCatalog();
           showToast(`Đã liên kết thông tin từ Library cho ${res.linked} tranh.`);
         } catch (e) { showToast(e.message); }
-      })
+      }),
+      btn('🗑️ Remove All', 'cat-btn cat-btn-clear', async () => {
+        if (!confirm(`Xóa TẤT CẢ ${entries.length} ngày trong Picture Daily?`)) return;
+        catState.daily.entries = [];
+        expandedDaily.clear();
+        await saveDaily();
+        showToast('Đã xóa toàn bộ danh sách Picture Daily.');
+      }, entries.length === 0)
     );
 
     const filterRow = el('div', 'cat-filter-row');
@@ -892,7 +906,16 @@
           renderCatalog();
           showToast(`Đã liên kết thông tin từ Library cho ${res.linked} tranh.`);
         } catch (e) { showToast(e.message); }
-      })
+      }),
+      btn('🗑️ Remove All', 'cat-btn cat-btn-clear', async () => {
+        if (!confirm(`Xóa TẤT CẢ ${sections.length} Section (và toàn bộ Album/Tranh) trong Picture Explore?`)) return;
+        catState.explore.sections = [];
+        expandedSections.clear();
+        expandedAlbums.clear();
+        expandedExplorePics.clear();
+        await saveExplore();
+        showToast('Đã xóa toàn bộ danh sách Picture Explore.');
+      }, sections.length === 0)
     );
     const searchRow = el('div', 'cat-filter-row');
     const sInput = document.createElement('input');
