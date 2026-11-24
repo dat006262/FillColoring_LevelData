@@ -134,6 +134,12 @@ class LevelCreatorTests(unittest.TestCase):
         self.assertEqual(push_res['exportedCount'], 1)
         self.assertEqual(push_res['skipped'], [])
 
+    def test_settings_reload_from_disk(self):
+        self.creator.save_settings({'lineThreshold': 185, 'ignoreWhiteRegions': True})
+        reloaded = LevelCreatorManager(self.data_dir, output_dir=self.output_dir, catalog_store=self.catalog)
+        self.assertEqual(reloaded.state()['settings']['lineThreshold'], 185)
+        self.assertTrue(reloaded.state()['settings']['ignoreWhiteRegions'])
+
     def test_http_creator_endpoints(self):
         c_bytes, l_bytes = make_donut_pair((100, 100))
         server = make_server(self.projects, port=0, catalog=self.catalog, creator=self.creator)
