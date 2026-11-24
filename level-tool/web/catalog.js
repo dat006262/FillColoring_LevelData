@@ -64,15 +64,19 @@
   }
 
   function switchView(mode) {
-    activeView = mode === 'catalog' ? 'catalog' : 'studio';
+    activeView = (mode === 'catalog' || mode === 'creator') ? mode : 'studio';
     localStorage.setItem('studio-view-mode', activeView);
-    const isCat = activeView === 'catalog';
-    $('studio-view').hidden = isCat;
-    $('catalog-view').hidden = !isCat;
-    $('nav-studio-btn')?.classList.toggle('active', !isCat);
-    $('nav-catalog-btn')?.classList.toggle('active', isCat);
-    if (isCat) loadCatalogState();
+    $('studio-view').hidden = activeView !== 'studio';
+    $('catalog-view').hidden = activeView !== 'catalog';
+    if ($('creator-view')) $('creator-view').hidden = activeView !== 'creator';
+    $('nav-studio-btn')?.classList.toggle('active', activeView === 'studio');
+    $('nav-creator-btn')?.classList.toggle('active', activeView === 'creator');
+    $('nav-catalog-btn')?.classList.toggle('active', activeView === 'catalog');
+    if (activeView === 'catalog') loadCatalogState();
+    if (activeView === 'creator' && window.loadLevelCreatorState) window.loadLevelCreatorState();
   }
+  window.switchStudioView = switchView;
+  window.reloadCatalogState = loadCatalogState;
 
   function switchCatalogTab(tabName) {
     activeTab = tabName;
@@ -1282,6 +1286,7 @@
 
   // ---------- Event Wiring ----------
   $('nav-studio-btn')?.addEventListener('click', () => switchView('studio'));
+  $('nav-creator-btn')?.addEventListener('click', () => switchView('creator'));
   $('nav-catalog-btn')?.addEventListener('click', () => switchView('catalog'));
 
   document.querySelectorAll('.cat-main-tab').forEach(btnEl => {

@@ -17,16 +17,38 @@ from pathlib import Path
 from core import Store, WorkflowError, GLOBAL_OUTPUT_DIR
 from browser_bridge import BrowserError
 from catalog import CatalogStore, APP_VERSION
+from level_creator import LevelCreatorManager
 
 HERE = Path(__file__).resolve().parent
 SERVER_REVISION = hashlib.sha256(b''.join((HERE / name).read_bytes() for name in
-    ('server.py', 'core.py', 'browser_bridge.py', 'catalog.py'))).hexdigest()
+    ('server.py', 'core.py', 'browser_bridge.py', 'catalog.py', 'level_creator.py'))).hexdigest()
 
 
-def make_server(store, port=0, catalog=None):
+def _browse_windows_folder(initial_dir: str = '') -> str:
+    if os.name != 'nt':
+        return ''
+    import subprocess
+    safe_init = (initial_dir or '').replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Windows.Forms; "
+        "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+        f"if ('{safe_init}' -and (Test-Path -LiteralPath '{safe_init}')) {{ $d.SelectedPath = '{safe_init}' }}; "
+        "$f = New-Object System.Windows.Forms.Form; $f.TopMost = $true; "
+        "if ($d.ShowDialog($f) -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }"
+    )
+    proc = subprocess.run(
+        ['powershell.exe', '-NoProfile', '-STA', '-Command', script],
+        capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120,
+    )
+    return (proc.stdout or '').strip()
+
+
+def make_server(store, port=0, catalog=None, creator=None):
     token = secrets.token_urlsafe(32)
     if catalog is None:
         catalog = CatalogStore(store.root, output_dir=store.output_dir, projects_store=store)
+    if creator is None:
+        creator = LevelCreatorManager(store.root, output_dir=store.output_dir, catalog_store=catalog)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -65,6 +87,8 @@ def make_server(store, port=0, catalog=None):
                                           'browser': store.browser.status(), 'app_version': APP_VERSION})
                 if path == '/api/catalog/state':
                     return self.send(catalog.state())
+                if path == '/api/creator/state':
+                    return self.send(creator.state())
                 if path.startswith('/api/catalog/asset/'):
                     parts = path.split('/')
                     if len(parts) != 6:
@@ -85,7 +109,8 @@ def make_server(store, port=0, catalog=None):
                             raise WorkflowError('Không tìm thấy ảnh.')
                         return self.send((store.directory(project['id']) / record['file']).read_bytes(), mime='image/png')
                 files = {'/': 'index.html', '/app.js': 'app.js', '/catalog.js': 'catalog.js',
-                         '/style.css': 'style.css', '/browser-help': 'browser-help.html'}
+                         '/level_creator.js': 'level_creator.js', '/style.css': 'style.css',
+                         '/browser-help': 'browser-help.html'}
                 if path not in files:
                     return self.send({'error': 'Không tìm thấy.'}, 404)
                 file = HERE / 'web' / files[path]
@@ -209,6 +234,47 @@ def make_server(store, port=0, catalog=None):
                         if not sd:
                             raise WorkflowError('Chưa cấu hình thư mục FillColoring.')
                         folder = sd
+                    folder.mkdir(parents=True, exist_ok=True)
+                    os.startfile(str(folder))
+                    result = {'ok': True}
+                elif path == '/api/creator/settings':
+                    result = creator.save_settings(data)
+                elif path == '/api/creator/start-batch':
+                    result = creator.start_batch(data)
+                elif path == '/api/creator/start-single':
+                    c_bytes = base64.b64decode(data['colored_data'], validate=True) if data.get('colored_data') else None
+                    l_bytes = base64.b64decode(data['line_data'], validate=True) if data.get('line_data') else None
+                    c_path = data.get('colored_path')
+                    l_path = data.get('line_path')
+                    if data.get('output_key'):
+                        k = data['output_key']
+                        c_path = str(creator.output_dir / f'{k}_colored_final.png')
+                        l_path = str(creator.output_dir / f'{k}_line_final.png')
+                    result = creator.create_single(
+                        colored_bytes=c_bytes,
+                        line_bytes=l_bytes,
+                        colored_path=c_path,
+                        line_path=l_path,
+                        filename=data.get('filename', ''),
+                        params=data.get('params') or data,
+                    )
+                elif path == '/api/creator/stop':
+                    result = creator.stop()
+                elif path == '/api/creator/browse-folder':
+                    selected_dir = _browse_windows_folder(data.get('initial', ''))
+                    if selected_dir and data.get('target') in ('batchInputFolder', 'outputFolder'):
+                        result = {'path': selected_dir, 'state': creator.save_settings({data['target']: selected_dir})}
+                    else:
+                        result = {'path': selected_dir}
+                elif path == '/api/creator/attach-catalog':
+                    bytes_path = Path(data['bytes_path'])
+                    if not bytes_path.is_file():
+                        raise WorkflowError('Không tìm thấy file .bytes để gắn vào Catalog.')
+                    result = catalog.upload_asset(data['pic_id'], 'regions', bytes_path.read_bytes(), filename=bytes_path.name)
+                elif path == '/api/creator/open-folder':
+                    kind = data.get('kind', 'output')
+                    st = creator.state()['settings']
+                    folder = Path(st['batchInputFolder'] if kind == 'input' else st['outputFolder'])
                     folder.mkdir(parents=True, exist_ok=True)
                     os.startfile(str(folder))
                     result = {'ok': True}
