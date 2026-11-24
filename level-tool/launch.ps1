@@ -42,17 +42,22 @@ function Open-StudioBrowser($targetUrl) {
         Start-Process $targetUrl
     }
 }
-# If server is already running and healthy, simply open it in browser (unless -Restart requested)
+# If server is already running and healthy at v1.0.1, simply open it in browser (unless -Restart requested)
 if (-not $Restart) {
     try {
         $health = Invoke-RestMethod -Uri "$url/api/health" -TimeoutSec 2
         if ($health -and $health.app -eq 'FillColoring Studio') {
-            Write-Host "FillColoring Studio dang chay. Dang mo trinh duyet..." -ForegroundColor Green
-            Open-StudioBrowser $url
-            exit 0
+            if ($health.app_version -eq '1.0.1') {
+                Write-Host "FillColoring Studio v1.0.1 dang chay. Dang mo trinh duyet..." -ForegroundColor Green
+                Open-StudioBrowser $url
+                exit 0
+            }
+            Write-Host "Phat hien phien ban cu, dang khoi dong lai len v1.0.1..." -ForegroundColor Yellow
+            $Restart = $true
         }
     } catch { }
-} else {
+}
+if ($Restart) {
     # If -Restart requested, terminate old server process if possible
     try {
         $dataDir = Join-Path $toolDir 'data'

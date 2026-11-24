@@ -1,8 +1,12 @@
 <!doctype html>
-<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="app-token" content="__APP_TOKEN__"><title>FillColoring Studio</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script></head>
+<html lang="vi"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="app-token" content="__APP_TOKEN__"><title>FillColoring Studio v1.0.1</title><link rel="stylesheet" href="/style.css"><script src="/app.js" defer></script><script src="/catalog.js" defer></script></head>
 <body>
 <aside class="sidebar">
-  <div class="brand"><span class="brand-icon">F<span>c</span></span><div>FillColoring<strong>STUDIO</strong></div></div>
+  <div class="brand"><span class="brand-icon">F<span>c</span></span><div>FillColoring<strong>STUDIO <span class="ver-badge">v1.0.1</span></strong></div></div>
+  <div class="mode-switch" role="tablist" aria-label="Chế độ làm việc">
+    <button type="button" class="mode-btn active" id="nav-studio-btn">🎨 Tạo Level</button>
+    <button type="button" class="mode-btn" id="nav-catalog-btn">🗂️ Catalog <span class="nav-count" id="nav-catalog-count">0</span></button>
+  </div>
   <button class="primary wide" id="new-project">＋ Tạo mới / Nhập ảnh</button>
   <div class="library-label">THƯ VIỆN TRANH <span id="count">0</span></div>
   <input type="search" id="search" placeholder="Tìm theo tên tranh…" aria-label="Tìm tranh">
@@ -10,6 +14,7 @@
   <div class="sidebar-bottom"><span class="local-dot"></span> Dữ liệu trên máy của bạn<button class="secondary wide" id="settings-button">⚙ Cài đặt xử lý</button></div>
 </aside>
 <main>
+  <div id="studio-view">
   <header><div><div class="eyebrow">KHÔNG GIAN LÀM LEVEL</div><h1 id="project-title">Từ tranh gốc đến bộ level hoàn chỉnh</h1><p id="project-subtitle">Quy trình 5 bước: AI Studio → Canva → Gemini → AI Studio → Xóa nền</p></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;"><button class="secondary danger" id="stop-job-header-btn" style="background:#e53935;color:#fff;font-weight:bold;font-size:13px;padding:8px 16px;border-radius:8px;border:none;" disabled title="Dừng việc tạo tranh đang chạy">🛑 Dừng tạo tranh</button><button class="primary" id="run-all-header-button" data-run="all" style="background:linear-gradient(135deg, #6200ea, #b388ff);color:#fff;font-weight:bold;font-size:13px;padding:8px 16px;border-radius:8px;border:none;cursor:pointer;box-shadow:0 2px 8px rgba(98,0,234,0.3);">⚡ Chạy tự động 5 bước (Xuất 5 ảnh)</button><div class="loop-group" style="display:inline-flex;align-items:center;background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:2px 8px;gap:6px;"><label style="font-size:12px;font-weight:bold;color:#0d47a1;display:flex;align-items:center;gap:4px;">Lặp:<input type="number" id="loop-count-input" min="1" max="100" value="10" style="width:44px;padding:3px 2px;font-size:12px;font-weight:bold;border:1px solid #64b5f6;border-radius:4px;text-align:center;">bộ</label><button class="primary" id="loop-start-header-btn" style="background:linear-gradient(135deg, #0288d1, #00b0ff);color:#fff;font-weight:bold;font-size:13px;padding:8px 14px;border-radius:8px;border:none;cursor:pointer;box-shadow:0 2px 8px rgba(2,136,209,0.3);" title="Tự động lặp lại quy trình 5 bước N lần liên tục">🔁 Chạy lặp liên tục</button><button class="secondary danger" id="loop-stop-header-btn" style="background:#e53935;color:#fff;font-weight:bold;font-size:13px;padding:8px 14px;border-radius:8px;border:none;cursor:pointer;" hidden title="Dừng chế độ lặp tự động">🛑 Dừng lặp</button></div><label class="toggle-focus-group" style="display:inline-flex;align-items:center;background:#ede7f6;border:1px solid #d1c4e9;border-radius:8px;padding:4px 8px;gap:5px;cursor:pointer;font-size:12px;font-weight:600;color:#512da8;user-select:none;" title="Bật: Tự động kéo tab AI/Canva lên trước để tránh trình duyệt làm chậm. Tắt: Cho phép chạy ngầm mà không giật màn hình hoặc cướp focus."><input type="checkbox" id="toggle-force-focus" checked style="cursor:pointer;accent-color:#7e57c2;width:15px;height:15px;"><span>🎯 Buộc Focus</span></label><button class="secondary" id="output-folder-button">📁 Mở thư mục Output</button><button class="secondary" id="folder-button" hidden>Mở thư mục tranh</button><button class="secondary danger" id="delete-button" hidden title="Xóa tranh này khỏi thư viện">🗑 Xóa tranh</button></div></header>
   <div id="connection" class="notice error" hidden>Không kết nối được công cụ. Mở lại bằng file Khởi động rồi tải lại trang.</div>
   <div id="browser-notice" class="notice"><span id="browser-status">Đang kiểm tra kết nối Chrome…</span> <a href="/browser-help" target="_blank" rel="noopener">Hướng dẫn kết nối</a></div>
@@ -34,8 +39,80 @@
     </section>
     <div id="export-status" class="notice success" hidden></div>
   </div>
+  </div>
+  <section id="catalog-view" hidden>
+    <div class="cat-shell">
+      <div class="cat-top-title">
+        <div>
+          <div class="eyebrow">REMOTE PICTURE SETTINGS · v1.0.1</div>
+          <h1>Remote Picture Catalog</h1>
+        </div>
+        <div class="cat-source-select-wrap">
+          <label for="cat-pull-source">Nguồn Pull:</label>
+          <select id="cat-pull-source">
+            <option value="auto">Tự động (Local ServerData → Hosting)</option>
+            <option value="local">Local (FillColoring/ServerData/Pictures)</option>
+            <option value="remote">Remote Hosting URL</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="cat-box cat-working-header">
+        <div class="cat-mode-row">
+          <span id="cat-mode-indicator" class="cat-mode-badge">🟡 Data Mode: Chưa có Working Copy</span>
+          <span id="cat-sync-time" class="cat-meta-text"></span>
+        </div>
+        <p class="cat-subtitle">Working Copy nằm cục bộ tại <code>level-tool/data/remote_catalog/</code>. Chỉnh sửa tự do, sau đó bấm <b>PUSH DATA</b> để đóng gói sang <code>FillColoring/ServerData/Pictures/</code> và <b>Deploy Hosting</b>.</p>
+        <div class="cat-global-actions">
+          <button type="button" class="cat-btn cat-btn-pull" id="cat-pull-all">📥 PULL DATA (ALL)</button>
+          <button type="button" class="cat-btn cat-btn-push" id="cat-push-all">📤 PUSH DATA (ALL)</button>
+          <button type="button" class="cat-btn cat-btn-deploy" id="cat-deploy-btn">🚀 Deploy Hosting</button>
+          <button type="button" class="cat-btn cat-btn-clear" id="cat-clear-working">🗑️ Clear Working</button>
+        </div>
+      </div>
+
+      <div class="cat-main-tabs" role="tablist" aria-label="Catalog Tabs">
+        <button type="button" class="cat-main-tab active" data-cat-tab="general">General &amp; Hosting</button>
+        <button type="button" class="cat-main-tab" data-cat-tab="library">Picture Library</button>
+        <button type="button" class="cat-main-tab" data-cat-tab="daily">Picture Daily</button>
+        <button type="button" class="cat-main-tab" data-cat-tab="explore">Picture Explore</button>
+      </div>
+
+      <div id="cat-tab-general" class="cat-tab-panel"></div>
+      <div id="cat-tab-library" class="cat-tab-panel" hidden></div>
+      <div id="cat-tab-daily" class="cat-tab-panel" hidden></div>
+      <div id="cat-tab-explore" class="cat-tab-panel" hidden></div>
+    </div>
+  </section>
 </main>
 <div id="toast" role="status" aria-live="polite" hidden></div>
+<dialog id="cat-import-dialog">
+  <form id="cat-import-form">
+    <div class="dialog-heading">
+      <h2>Nhập tranh từ Output / Studio</h2>
+      <button class="close" type="button" data-close="cat-import-dialog" aria-label="Đóng">×</button>
+    </div>
+    <p>Chọn cặp <code>_colored_final.png</code> &amp; <code>_line_final.png</code> để tự động tạo <code>coloredTexture</code>, thu nhỏ <code>thumbnail</code> 256×256, tính kích thước cache và đặt mặc định <b>Free</b>. (<code>FileByte</code> có thể bổ sung sau).</p>
+    <div class="cat-import-options">
+      <label class="field">Đích nhập
+        <select id="cat-import-target">
+          <option value="library">Picture Library</option>
+          <option value="daily">Picture Daily</option>
+          <option value="explore">Picture Explore (Section 1 / Album 1)</option>
+        </select>
+      </label>
+      <label class="field">Tags mặc định (cách nhau bởi dấu phẩy)
+        <input id="cat-import-tags" placeholder="Ví dụ: animal, nature">
+      </label>
+    </div>
+    <div id="cat-output-list" class="cat-output-list"></div>
+    <div class="dialog-actions">
+      <button type="button" class="secondary" data-close="cat-import-dialog">Đóng</button>
+      <button type="submit" class="primary" id="cat-import-submit">📥 Nhập các tranh đã chọn</button>
+    </div>
+  </form>
+</dialog>
+<input type="file" id="cat-asset-file" hidden>
 <dialog id="import-dialog"><form id="import-form"><div class="dialog-heading"><h2>Tạo mới / Nhập ảnh</h2><button class="close" type="button" data-close="import-dialog" aria-label="Đóng">×</button></div><p>Chọn ảnh từ máy hoặc để trống ảnh để tạo mới dự án và chạy Bước 1 từ prompt.</p><label class="field">Tên tranh (để trống sẽ tự lấy tên file)<input id="new-name" placeholder="Ví dụ: picture" maxlength="90"></label><label class="field">Ảnh từ máy (tùy chọn)<input type="file" id="new-files" accept="image/png,image/jpeg,image/webp" multiple></label><label class="field">Ảnh này đang ở bước nào?<select id="new-stage"><option value="origin">Ảnh màu gốc (Bước 1)</option><option value="source">Line xuất từ Canva, chưa vá (Bước 2)</option><option value="patch">Line đã vá, cần duyệt trước khi tô màu (Bước 3)</option></select></label><div class="dialog-actions"><button type="button" class="secondary" data-close="import-dialog">Hủy</button><button class="primary" id="import-submit">Tạo tranh</button></div></form></dialog>
 <dialog id="settings-dialog"><form id="settings-form" novalidate><div class="dialog-heading"><h2>Cài đặt xử lý</h2><button class="close" type="button" data-close="settings-dialog" aria-label="Đóng">×</button></div><label class="field">Cách xử lý ảnh<select id="processing-mode"><option value="browser">Gemini & Canva trên Chrome — không dùng API key</option><option value="api">Gemini API — tính phí theo API</option></select></label>
 <p id="settings-save-status" role="status" aria-live="polite">Thay đổi được tự lưu sau khi bạn ngừng nhập.</p><div id="browser-settings"><p>Dùng phiên Google & Canva đã đăng nhập trong Chrome. Giữ tab Studio mở trong cùng Chrome.</p><label class="field">URL Canva tạo nét (Bước 2)<input id="canva-url" type="url" placeholder="https://www.canva.com/design/.../edit"></label><label class="field">URL Gemini vá nét (Bước 3)<input id="browser-url" type="url" placeholder="https://gemini.google.com/u/2/app"></label><label class="field">URL AI Studio tạo ảnh (Bước 1 — chỉ gửi chữ)<input id="aistudio-origin-url" type="url" required placeholder="https://aistudio.google.com/u/2/prompts/new_chat"></label><label class="field">URL AI Studio tô màu (Bước 4)<input id="aistudio-url" type="url" placeholder="https://aistudio.google.com/u/2/prompts/..."></label><label class="field">Email Google sử dụng<input id="browser-email" type="email" placeholder="mongnangthoi@gmail.com"></label><label class="checkbox" style="margin-top:8px;display:flex;align-items:center;gap:8px;cursor:pointer;"><input id="setting-force-focus" type="checkbox" style="accent-color:#7e57c2;width:16px;height:16px;"> 🎯 <b>Buộc focus tab tác vụ</b> (Tự động kéo cửa sổ AI Studio / Canva / Gemini lên trước)</label><a href="/browser-help" target="_blank" rel="noopener">Hướng dẫn cài và kết nối tiện ích Chrome ↗</a></div>

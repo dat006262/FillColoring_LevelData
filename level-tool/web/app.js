@@ -120,7 +120,9 @@ function render() {
     $('export-status').replaceChildren(document.createTextNode('Đã xuất kết quả vào F:\\noichuagit\\FillColoring_LevelData\\output '));
     const b=document.createElement('button');b.className='text-button';b.textContent='Mở thư mục Output';
     b.onclick=()=>act('open-folder',{output:true});
-    $('export-status').append(b);
+    const c=document.createElement('button');c.className='text-button';c.textContent='➕ Đưa vào Catalog';
+    c.onclick=()=>{ if(window.importProjectToCatalog) window.importProjectToCatalog(p); };
+    $('export-status').append(b, c);
   }
   if ($('step1-prompt') && document.activeElement !== $('step1-prompt') && !$('step1-prompt').value) {
     $('step1-prompt').value = state.settings.origin_prompt || '';

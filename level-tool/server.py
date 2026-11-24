@@ -16,14 +16,17 @@ from pathlib import Path
 
 from core import Store, WorkflowError, GLOBAL_OUTPUT_DIR
 from browser_bridge import BrowserError
+from catalog import CatalogStore, APP_VERSION
 
 HERE = Path(__file__).resolve().parent
 SERVER_REVISION = hashlib.sha256(b''.join((HERE / name).read_bytes() for name in
-    ('server.py', 'core.py', 'browser_bridge.py'))).hexdigest()
+    ('server.py', 'core.py', 'browser_bridge.py', 'catalog.py'))).hexdigest()
 
 
-def make_server(store, port=0):
+def make_server(store, port=0, catalog=None):
     token = secrets.token_urlsafe(32)
+    if catalog is None:
+        catalog = CatalogStore(store.root, output_dir=store.output_dir, projects_store=store)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -54,12 +57,22 @@ def make_server(store, port=0):
             path = urllib.parse.urlparse(self.path).path
             try:
                 if path == '/api/health':
-                    return self.send({'app': 'FillColoring Studio', 'version': 3,
+                    return self.send({'app': 'FillColoring Studio', 'version': 3, 'app_version': APP_VERSION,
                                       'revision': SERVER_REVISION, 'pid': os.getpid()})
                 if path == '/api/state':
                     with store.lock:
                         return self.send({'projects': store.list(), 'jobs': store.jobs, 'settings': store.settings(),
-                                          'browser': store.browser.status()})
+                                          'browser': store.browser.status(), 'app_version': APP_VERSION})
+                if path == '/api/catalog/state':
+                    return self.send(catalog.state())
+                if path.startswith('/api/catalog/asset/'):
+                    parts = path.split('/')
+                    if len(parts) != 6:
+                        raise WorkflowError('Đường dẫn asset không hợp lệ.')
+                    return self.send(catalog.read_asset_bytes(urllib.parse.unquote(parts[4]), urllib.parse.unquote(parts[5])), mime='image/jpeg')
+                if path.startswith('/api/catalog/output-preview/'):
+                    fname = urllib.parse.unquote(path[len('/api/catalog/output-preview/'):])
+                    return self.send(catalog.read_output_preview(fname), mime='image/png')
                 if path.startswith('/asset/'):
                     parts = path.split('/')
                     if len(parts) != 4:
@@ -71,8 +84,8 @@ def make_server(store, port=0):
                         if not record:
                             raise WorkflowError('Không tìm thấy ảnh.')
                         return self.send((store.directory(project['id']) / record['file']).read_bytes(), mime='image/png')
-                files = {'/': 'index.html', '/app.js': 'app.js', '/style.css': 'style.css',
-                         '/browser-help': 'browser-help.html'}
+                files = {'/': 'index.html', '/app.js': 'app.js', '/catalog.js': 'catalog.js',
+                         '/style.css': 'style.css', '/browser-help': 'browser-help.html'}
                 if path not in files:
                     return self.send({'error': 'Không tìm thấy.'}, 404)
                 file = HERE / 'web' / files[path]
@@ -138,6 +151,65 @@ def make_server(store, port=0):
                         folder = store.directory(pid)
                         if data.get('export') and project.get('exported'):
                             folder = folder / project['exported']
+                    os.startfile(str(folder))
+                    result = {'ok': True}
+                elif path == '/api/catalog/settings':
+                    result = catalog.save_settings(data)
+                elif path == '/api/catalog/pull':
+                    result = catalog.pull_data(
+                        pull_library=bool(data.get('library', True)),
+                        pull_daily=bool(data.get('daily', True)),
+                        pull_explore=bool(data.get('explore', True)),
+                        source=data.get('source', 'auto'),
+                    )
+                elif path == '/api/catalog/push':
+                    result = catalog.push_data(
+                        push_library=bool(data.get('library', True)),
+                        push_daily=bool(data.get('daily', True)),
+                        push_explore=bool(data.get('explore', True)),
+                    )
+                elif path == '/api/catalog/deploy':
+                    result = catalog.deploy_hosting()
+                elif path == '/api/catalog/clear-working':
+                    result = catalog.clear_working()
+                elif path == '/api/catalog/library/save':
+                    result = catalog.save_library(data.get('pictures', []), data.get('renames'))
+                elif path == '/api/catalog/daily/save':
+                    result = catalog.save_daily(data.get('daily', {}), data.get('renames'))
+                elif path == '/api/catalog/explore/save':
+                    result = catalog.save_explore(data.get('explore', {}), data.get('renames'))
+                elif path == '/api/catalog/upload-asset':
+                    raw_b = base64.b64decode(data['data'], validate=True) if data.get('data') else b''
+                    result = catalog.upload_asset(data['pic_id'], data['kind'], raw_b, data.get('filename', ''))
+                elif path == '/api/catalog/clear-asset':
+                    result = catalog.clear_asset(data['pic_id'], data['kind'])
+                elif path == '/api/catalog/cache-aspect':
+                    result = catalog.cache_aspect(data.get('pic_id'))
+                elif path == '/api/catalog/link-textures':
+                    result = catalog.link_textures()
+                elif path == '/api/catalog/import-output':
+                    result = catalog.import_output_pair(
+                        key=data.get('key'),
+                        project_id=data.get('project_id'),
+                        pic_id=data.get('pic_id'),
+                        name=data.get('name'),
+                        tags=data.get('tags'),
+                        target=data.get('target', 'library'),
+                        section_index=int(data.get('section_index', 0) or 0),
+                        album_index=int(data.get('album_index', 0) or 0),
+                    )
+                elif path == '/api/catalog/open-folder':
+                    kind = data.get('kind', 'serverdata')
+                    if kind == 'working':
+                        folder = catalog.root
+                    elif kind == 'output':
+                        folder = catalog.output_dir
+                    else:
+                        sd = catalog.server_data_dir()
+                        if not sd:
+                            raise WorkflowError('Chưa cấu hình thư mục FillColoring.')
+                        folder = sd
+                    folder.mkdir(parents=True, exist_ok=True)
                     os.startfile(str(folder))
                     result = {'ok': True}
                 else:
