@@ -45,6 +45,20 @@ def _normalize_translations(entries: Any) -> list[dict[str, str]]:
     return result
 
 
+def _normalize_tag_translations(entries: Any) -> list[dict[str, Any]]:
+    if not isinstance(entries, list):
+        return []
+    result = []
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get('tag') or '').strip()
+        trans = _normalize_translations(item.get('translations'))
+        if tag or trans:
+            result.append({'tag': tag, 'translations': trans})
+    return result
+
+
 def _build_explore_dto(explore_data: dict[str, Any] | None) -> dict[str, Any]:
     sections_out = []
     for s in (explore_data or {}).get('sections', []):
@@ -271,6 +285,7 @@ def _empty_working() -> dict[str, Any]:
         'pulled_at': None,
         'updated_at': None,
         'library': [],
+        'tagTranslations': [],
         'daily': {'defaultPicture': None, 'entries': []},
         'explore': {'sections': []},
     }
@@ -550,6 +565,7 @@ class CatalogStore:
                 'updatedAt': self.working.get('updated_at'),
                 'settings': self.settings(),
                 'library': lib,
+                'tagTranslations': _normalize_tag_translations(self.working.get('tagTranslations')),
                 'daily': {'defaultPicture': default_pic, 'entries': entries},
                 'explore': {'hasData': len(sections) > 0, 'sections': sections},
                 'supportedLanguages': list(SUPPORTED_LANGUAGES),
@@ -581,7 +597,8 @@ class CatalogStore:
         if src.is_dir() and not dst.exists():
             shutil.copytree(src, dst)
 
-    def save_library(self, pictures: list[dict[str, Any]], renames: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    def save_library(self, pictures: list[dict[str, Any]], renames: list[dict[str, str]] | None = None,
+                     tag_translations: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         if not isinstance(pictures, list):
             raise WorkflowError('Danh sách Library không hợp lệ.')
         with self.lock:
@@ -599,6 +616,8 @@ class CatalogStore:
                     seen_ids.add(key)
                 normalized.append(np)
             self.working['library'] = normalized
+            if tag_translations is not None:
+                self.working['tagTranslations'] = _normalize_tag_translations(tag_translations)
             self._save_working()
             return self.state()
 
@@ -1009,6 +1028,7 @@ class CatalogStore:
                             'fileByteName': 'regions.bytes' if (pdir / 'regions.bytes').is_file() else '',
                         }))
                 self.working['library'] = pictures
+                self.working['tagTranslations'] = _normalize_tag_translations((catalog or {}).get('tagTranslations'))
 
             if pull_daily:
                 daily_json, src_used = self._load_json_source('daily.json', source)
@@ -1193,11 +1213,16 @@ class CatalogStore:
                 elif prev_cat and isinstance(prev_cat.get('explore'), dict):
                     explore_out = _build_explore_dto(prev_cat['explore'])
 
-            # Write catalog.json (bundling explore metadata & translations)
+            tag_trans_out = _normalize_tag_translations(self.working.get('tagTranslations'))
+            if not push_library and not tag_trans_out and prev_cat and isinstance(prev_cat.get('tagTranslations'), list):
+                tag_trans_out = _normalize_tag_translations(prev_cat['tagTranslations'])
+
+            # Write catalog.json (bundling tagTranslations + explore metadata & translations)
             catalog_payload = {
                 'schemaVersion': 1,
                 'revision': datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S'),
                 'pictures': exported_entries,
+                'tagTranslations': tag_trans_out,
                 'explore': explore_out,
             }
             atomic_json(sd / 'catalog.json', catalog_payload)

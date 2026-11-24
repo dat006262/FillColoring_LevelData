@@ -486,12 +486,136 @@
   // ---------- TAB 1: Picture Library ----------
   async function saveLibrary(renames = []) {
     try {
-      catState = await catApi('library/save', { pictures: catState.library, renames });
+      catState = await catApi('library/save', {
+        pictures: catState.library,
+        tagTranslations: catState.tagTranslations || [],
+        renames,
+      });
       renderCatalog();
     } catch (e) {
       showToast(e.message);
       await loadCatalogState();
     }
+  }
+
+  function renderLibraryTagTranslations(host) {
+    const langs = catState?.supportedLanguages || DEFAULT_SUPPORTED_LANGUAGES;
+    catState.tagTranslations = catState.tagTranslations || [];
+    const list = catState.tagTranslations;
+    const box = el('div', 'cat-box');
+
+    if (activeLibTag && activeLibTag.toLowerCase() !== 'all') {
+      let entry = list.find(t => t && (t.tag || '').trim().toLowerCase() === activeLibTag.toLowerCase());
+      if (!entry) {
+        const row = el('div', 'cat-trans-head');
+        row.append(
+          el('span', 'cat-meta-text', `Tag '${activeLibTag}' chưa có bản dịch catalog.`),
+          btn('Init 12 Langs', 'cat-btn cat-btn-mini', () => {
+            entry = {
+              tag: activeLibTag,
+              translations: langs.map(lang => ({ lang, text: lang === 'EN' ? activeLibTag : '' })),
+            };
+            list.push(entry);
+            expandedTranslations.add(`lib:tag:${activeLibTag.toLowerCase()}`);
+            saveLibrary();
+          })
+        );
+        box.append(row);
+        host.append(box);
+        return;
+      }
+
+      box.append(renderTranslationDrawer({
+        entries: entry.translations,
+        setEntries: next => { entry.translations = next; },
+        label: `Tag '${activeLibTag}' Translations`,
+        multiline: false,
+        fallbackText: activeLibTag,
+        expandKey: `lib:tag:${activeLibTag.toLowerCase()}`,
+        onSave: () => saveLibrary(),
+        onRedraw: () => renderLibraryTab(),
+      }));
+      host.append(box);
+      return;
+    }
+
+    const allKey = 'lib:tags:all';
+    const isOpen = expandedTranslations.has(allKey);
+    const head = el('div', 'cat-trans-head');
+    const fold = el('button', 'cat-foldout cat-trans-fold', `${isOpen ? '▼' : '▶'} 🌐 Tag Translations (${list.length} tags)`);
+    fold.type = 'button';
+    fold.onclick = () => {
+      if (isOpen) expandedTranslations.delete(allKey);
+      else expandedTranslations.add(allKey);
+      renderLibraryTab();
+    };
+    const syncBtn = btn('Sync Missing Tags', 'cat-btn cat-btn-mini', () => {
+      let added = 0;
+      for (const tag of getAllLibraryTags()) {
+        if (!list.some(t => t && (t.tag || '').trim().toLowerCase() === tag.toLowerCase())) {
+          list.push({
+            tag,
+            translations: langs.map(lang => ({ lang, text: lang === 'EN' ? tag : '' })),
+          });
+          added++;
+        }
+      }
+      expandedTranslations.add(allKey);
+      saveLibrary();
+      showToast(added ? `Đã thêm bản dịch 12 ngôn ngữ cho ${added} tag mới.` : 'Tất cả tag đã có trong danh sách bản dịch.');
+    });
+    head.append(fold, syncBtn);
+    box.append(head);
+
+    if (!isOpen) {
+      host.append(box);
+      return;
+    }
+
+    const body = el('div', 'cat-trans-body');
+    list.forEach((entry, idx) => {
+      const wrap = el('div', 'cat-tag-trans-item');
+      const topRow = el('div', 'cat-trans-row');
+      const tagInp = document.createElement('input');
+      tagInp.type = 'text';
+      tagInp.className = 'cat-trans-text';
+      tagInp.value = entry.tag || '';
+      tagInp.placeholder = 'Tên tag';
+      tagInp.onchange = () => { entry.tag = tagInp.value.trim(); saveLibrary(); };
+      topRow.append(
+        el('span', 'cat-detail-label', 'Tag'),
+        tagInp,
+        btn('Remove', 'cat-btn cat-btn-remove', () => {
+          list.splice(idx, 1);
+          saveLibrary();
+        })
+      );
+      wrap.append(
+        topRow,
+        renderTranslationDrawer({
+          entries: entry.translations,
+          setEntries: next => { entry.translations = next; },
+          label: `Translations (${entry.tag || ''})`,
+          multiline: false,
+          fallbackText: entry.tag || '',
+          expandKey: `lib:tag-row:${idx}:${(entry.tag || '').toLowerCase()}`,
+          onSave: () => saveLibrary(),
+          onRedraw: () => renderLibraryTab(),
+        })
+      );
+      body.append(wrap);
+    });
+
+    body.append(btn('+ Add Tag Translation', 'cat-btn cat-btn-mini', () => {
+      list.push({
+        tag: 'new_tag',
+        translations: langs.map(lang => ({ lang, text: '' })),
+      });
+      expandedTranslations.add(`lib:tag-row:${list.length - 1}:new_tag`);
+      saveLibrary();
+    }));
+    box.append(body);
+    host.append(box);
   }
 
   function renderLibraryTab() {
@@ -591,6 +715,7 @@
     );
     bar.append(toolBtns);
     host.append(bar);
+    renderLibraryTagTranslations(host);
 
     const listWrap = el('div', 'cat-list-wrap');
     listWrap.id = 'cat-lib-list';
@@ -937,7 +1062,10 @@
     renderExploreSectionsOnly();
   }
 
-  function renderTranslationDrawer({ entries, setEntries, label, multiline = false, fallbackText = '', expandKey }) {
+  function renderTranslationDrawer({
+    entries, setEntries, label, multiline = false, fallbackText = '', expandKey,
+    onSave = saveExplore, onRedraw = renderExploreSectionsOnly,
+  }) {
     const langs = catState?.supportedLanguages || DEFAULT_SUPPORTED_LANGUAGES;
     const list = Array.isArray(entries) ? entries : [];
     const filled = list.filter(e => e && String(e.text || '').trim().length > 0).length;
@@ -950,7 +1078,7 @@
     fold.onclick = () => {
       if (isOpen) expandedTranslations.delete(expandKey);
       else expandedTranslations.add(expandKey);
-      renderExploreSectionsOnly();
+      onRedraw();
     };
     const initBtn = btn('Init 12 Langs', 'cat-btn cat-btn-mini', () => {
       const next = [...list];
@@ -962,7 +1090,7 @@
       }
       setEntries(next);
       expandedTranslations.add(expandKey);
-      saveExplore();
+      onSave();
     });
     head.append(fold, initBtn);
     box.append(head);
@@ -980,19 +1108,19 @@
         langInp.className = 'cat-trans-lang';
         langInp.value = row.lang || '';
         langInp.placeholder = 'EN';
-        langInp.onchange = () => { row.lang = langInp.value.trim(); saveExplore(); };
+        langInp.onchange = () => { row.lang = langInp.value.trim(); onSave(); };
 
         const textInp = multiline ? document.createElement('textarea') : document.createElement('input');
         if (multiline) textInp.rows = 2;
         else textInp.type = 'text';
         textInp.className = 'cat-trans-text';
         textInp.value = row.text || '';
-        textInp.onchange = () => { row.text = textInp.value; saveExplore(); };
+        textInp.onchange = () => { row.text = textInp.value; onSave(); };
 
         const delBtn = btn('×', 'cat-btn cat-btn-mini danger', () => {
           list.splice(idx, 1);
           setEntries(list);
-          saveExplore();
+          onSave();
         });
         rWrap.append(langInp, textInp, delBtn);
         body.append(rWrap);
@@ -1002,7 +1130,7 @@
       const next = [...list, { lang: 'EN', text: '' }];
       setEntries(next);
       expandedTranslations.add(expandKey);
-      saveExplore();
+      onSave();
     }));
     box.append(body);
     return box;

@@ -198,7 +198,7 @@ def make_server(store, port=0, catalog=None, creator=None):
                 elif path == '/api/catalog/clear-working':
                     result = catalog.clear_working()
                 elif path == '/api/catalog/library/save':
-                    result = catalog.save_library(data.get('pictures', []), data.get('renames'))
+                    result = catalog.save_library(data.get('pictures', []), data.get('renames'), data.get('tagTranslations'))
                 elif path == '/api/catalog/daily/save':
                     result = catalog.save_daily(data.get('daily', {}), data.get('renames'))
                 elif path == '/api/catalog/explore/save':

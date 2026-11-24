@@ -118,12 +118,14 @@ class CatalogTests(unittest.TestCase):
         self.catalog.import_output_pair(key='fox', tags=['animal'])
         self.catalog.import_output_pair(key='pending', tags=['nature'])
 
-        # Rename fox_bytes -> animal_99_bytes
+        # Rename fox_bytes -> animal_99_bytes and save tagTranslations
         lib = self.catalog.state()['library']
         lib[0]['id'] = 'animal_99_bytes'
         lib[0]['name'] = 'Fox 99'
-        self.catalog.save_library(lib, renames=[{'from': 'fox_bytes', 'to': 'animal_99_bytes'}])
+        tag_trans = [{'tag': 'animal', 'translations': [{'lang': 'EN', 'text': 'Animals'}, {'lang': 'VN', 'text': 'Động vật'}]}]
+        self.catalog.save_library(lib, renames=[{'from': 'fox_bytes', 'to': 'animal_99_bytes'}], tag_translations=tag_trans)
         self.assertTrue(self.catalog.state()['library'][0]['hasColor'])
+        self.assertEqual(self.catalog.state()['tagTranslations'][0]['translations'][1]['text'], 'Động vật')
 
         # Upload .bytes only for animal_99_bytes (pending_bytes stays without FileByte)
         self.catalog.upload_asset('animal_99_bytes', 'regions', make_valid_level_bytes(500, 500, 5), 'fox.bytes')
@@ -169,8 +171,10 @@ class CatalogTests(unittest.TestCase):
         self.assertTrue((sd / 'explore.json').is_file())
         self.assertTrue((sd / 'pictures' / 'animal_99_bytes' / 'r1' / 'regions.bytes').is_file())
 
-        # Verify catalog.json bundles explore with translations
+        # Verify catalog.json bundles tagTranslations + explore with translations
         cat_json = json.loads((sd / 'catalog.json').read_text(encoding='utf-8'))
+        self.assertEqual(cat_json['tagTranslations'][0]['tag'], 'animal')
+        self.assertEqual(cat_json['tagTranslations'][0]['translations'][1]['text'], 'Động vật')
         self.assertTrue(cat_json['explore']['hasData'])
         self.assertEqual(cat_json['explore']['sections'][0]['nameTranslations'][0]['text'], 'Featured Themes')
         self.assertEqual(cat_json['explore']['sections'][0]['albums'][0]['descriptionTranslations'][0]['text'], 'Cute animals')
@@ -183,6 +187,7 @@ class CatalogTests(unittest.TestCase):
         f_state = pull_res['state']
         self.assertEqual(len(f_state['library']), 1)
         self.assertEqual(f_state['library'][0]['id'], 'animal_99_bytes')
+        self.assertEqual(f_state['tagTranslations'][0]['translations'][1]['text'], 'Động vật')
         self.assertTrue(f_state['library'][0]['hasFileByte'])
         self.assertEqual(len(f_state['daily']['entries']), 1)
         self.assertEqual(len(f_state['explore']['sections']), 1)

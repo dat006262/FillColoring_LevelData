@@ -125,6 +125,7 @@
 .cat-trans-row{display:flex;align-items:flex-start;gap:6px}
 .cat-trans-lang{width:76px;flex:0 0 76px;background:#202126;color:#93c5fd;border:1px solid #52555f;padding:5px 7px;font-size:12px;font-weight:700;border-radius:5px}
 .cat-trans-text{flex:1;background:#202126;color:#f3f4f6;border:1px solid #52555f;padding:5px 8px;font-size:12px;border-radius:5px;min-width:0}
+.cat-tag-trans-item{background:#32343a;border:1px solid #484b54;border-radius:6px;padding:7px 9px}
 
 /* Level Creator Panel */
 .lc-panel{display:flex;flex-direction:column;gap:8px}
